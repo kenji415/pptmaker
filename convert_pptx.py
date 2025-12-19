@@ -9,6 +9,7 @@ import os
 import re
 import sys
 import shutil
+import io
 from copy import deepcopy
 from pptx import Presentation
 from pptx.util import Inches, Pt
@@ -366,6 +367,178 @@ def duplicate_slide_complete(prs, source_slide):
                 # GROUPシェイプのXMLには子シェイプも含まれているため、これでコピーされる
                 shape_xml = shape.element
                 new_shape_xml = deepcopy(shape_xml)
+                
+                # GROUPシェイプの場合、XML内の画像リレーションシップのrIdを更新
+                if hasattr(shape, 'shape_type') and shape.shape_type == 6:  # GROUP
+                    # XML内のすべての画像リレーションシップを探してコピー
+                    try:
+                        # XML要素内のすべてのrId参照を探す（名前空間を考慮）
+                        def find_and_update_rids(element, dest_slide, source_slide):
+                            """XML要素内のrId参照を探して更新"""
+                            rId_map = {}  # 元のrId -> 新しいrIdのマッピング
+                            
+                            # ソーススライドのリレーションシップを取得
+                            source_rels = source_slide.part.rels
+                            
+                            # まず、XML内で使用されているすべてのrIdを収集
+                            used_rIds = set()
+                            ns_embed = '{http://schemas.openxmlformats.org/officeDocument/2006/relationships}embed'
+                            
+                            for elem in element.iter():
+                                # r:embed属性を確認
+                                if ns_embed in elem.attrib:
+                                    used_rIds.add(elem.attrib[ns_embed])
+                                # その他のrId属性も確認
+                                for attr_name, attr_value in list(elem.attrib.items()):
+                                    if isinstance(attr_value, str) and attr_value.startswith('rId'):
+                                        used_rIds.add(attr_value)
+                            
+                            # デバッグ: 見つかったrIdを表示
+                            if used_rIds:
+                                print(f"  デバッグ: GROUPシェイプ内で見つかったrId: {used_rIds}")
+                            
+                            # 使用されているrIdの画像リレーションシップをコピー
+                            for rId in used_rIds:
+                                # スライドレベルのリレーションシップを確認
+                                if rId in source_rels:
+                                    try:
+                                        rel = source_rels[rId]
+                                        rel_type = rel.reltype
+                                        
+                                        # 画像のリレーションシップの場合（PNG/JPEG/GIFなど）
+                                        if "image" in rel_type or "http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" in rel_type:
+                                            # 画像データ（blob）を取得
+                                            try:
+                                                from pptx.parts.image import ImagePart
+                                                image_blob = None
+                                                
+                                                # target_partの型を確認
+                                                target_part = rel.target_part
+                                                
+                                                # ImagePartの場合、blobを取得
+                                                if isinstance(target_part, ImagePart):
+                                                    image_blob = target_part.blob
+                                                else:
+                                                    # target_partがImagePartでない場合、_targetから画像パートを取得
+                                                    try:
+                                                        target_path = rel._target
+                                                        # packageから画像パートを取得
+                                                        # target_pathが相対パスの場合、package.get_partで取得できる
+                                                        image_part = source_slide.part.package.get_part(target_path)
+                                                        if hasattr(image_part, 'blob'):
+                                                            image_blob = image_part.blob
+                                                        elif hasattr(image_part, 'image'):
+                                                            # imageプロパティがある場合（一部のパートタイプ）
+                                                            image_blob = image_part.image.blob
+                                                        else:
+                                                            # パートから直接読み込む
+                                                            image_blob = image_part._blob if hasattr(image_part, '_blob') else None
+                                                    except Exception as e:
+                                                        # _targetから取得できない場合、target_partから直接取得を試みる
+                                                        if hasattr(target_part, 'blob'):
+                                                            image_blob = target_part.blob
+                                                        elif hasattr(target_part, 'image'):
+                                                            image_blob = target_part.image.blob
+                                                        else:
+                                                            print(f"  デバッグ: 画像blob取得エラー (rId: {rId}): {e}")
+                                                
+                                                if image_blob is None:
+                                                    print(f"  デバッグ: 警告: 画像blobが取得できませんでした (rId: {rId})")
+                                                    continue
+                                                
+                                                print(f"  デバッグ: 画像リレーションシップ {rId} を処理中 (タイプ: {rel_type}, サイズ: {len(image_blob)} bytes)")
+                                                
+                                                # 既に同じ画像データのリレーションシップが存在するか確認
+                                                # スライドレベルのリレーションシップを確認
+                                                already_exists = False
+                                                existing_rId = None
+                                                for dest_rel in dest_slide.part.rels:
+                                                    try:
+                                                        if dest_slide.part.rels[dest_rel].reltype == rel_type:
+                                                            dest_target_part = dest_slide.part.rels[dest_rel].target_part
+                                                            if isinstance(dest_target_part, ImagePart):
+                                                                dest_blob = dest_target_part.blob
+                                                                if dest_blob == image_blob:
+                                                                    already_exists = True
+                                                                    existing_rId = dest_rel
+                                                                    print(f"  デバッグ: 既存のリレーションシップ {dest_rel} を使用")
+                                                                    break
+                                                    except:
+                                                        continue
+                                                
+                                                if not already_exists:
+                                                    # 画像パートは既にパッケージ内に存在している（shutil.copy2でコピー済み）
+                                                    # 元のスライドのリレーションシップから画像パートのパスを取得して、パッケージから直接取得
+                                                    try:
+                                                        # 元のスライドの画像パートのパスを取得
+                                                        source_image_path = rel._target
+                                                        
+                                                        # パッケージから同じパスで画像パートを取得
+                                                        # （パッケージはコピーされているので、同じパスで画像パートが存在するはず）
+                                                        found_image_part = None
+                                                        try:
+                                                            found_image_part = dest_slide.part.package.get_part(source_image_path)
+                                                            print(f"  デバッグ: パッケージ内で既存の画像パートを発見 (パス: {source_image_path})")
+                                                        except Exception as path_error:
+                                                            # パスで取得できない場合、get_or_add_image_partを使用
+                                                            print(f"  デバッグ: パスで取得できなかったため、get_or_add_image_partを使用: {path_error}")
+                                                            image_stream = io.BytesIO(image_blob)
+                                                            image_stream.seek(0)
+                                                            found_image_part = dest_slide.part.package.get_or_add_image_part(image_stream)
+                                                        
+                                                        # 新しいリレーションシップを作成（スライドレベル）
+                                                        # relate_toメソッドを使用
+                                                        from pptx.opc.constants import RELATIONSHIP_TYPE as RT
+                                                        new_rId = dest_slide.part.relate_to(found_image_part, RT.IMAGE)
+                                                        rId_map[rId] = new_rId
+                                                        print(f"  デバッグ: 新しいリレーションシップ {new_rId} を作成 (元のrId: {rId})")
+                                                    except Exception as e:
+                                                        print(f"  デバッグ: 画像パート追加エラー (rId: {rId}): {e}")
+                                                        print(f"  デバッグ: エラーの型: {type(e)}")
+                                                        import traceback
+                                                        print(f"  デバッグ: トレースバック:\n{traceback.format_exc()}")
+                                                        # エラーが発生しても処理を続行
+                                                        continue
+                                                else:
+                                                    rId_map[rId] = existing_rId
+                                                    print(f"  デバッグ: rIdマッピング {rId} -> {existing_rId}")
+                                            except Exception as e:
+                                                # blob取得に失敗した場合はスキップ
+                                                print(f"  デバッグ: 画像blob取得エラー (rId: {rId}): {e}")
+                                                pass
+                                    except Exception as e:
+                                        print(f"  デバッグ: リレーションシップ処理エラー (rId: {rId}): {e}")
+                                        pass
+                            
+                            # XML内のrId参照を更新
+                            updated_count = 0
+                            for elem in element.iter():
+                                # r:embed属性を更新
+                                if ns_embed in elem.attrib:
+                                    old_rId = elem.attrib[ns_embed]
+                                    if old_rId in rId_map:
+                                        elem.attrib[ns_embed] = rId_map[old_rId]
+                                        updated_count += 1
+                                        print(f"  デバッグ: r:embed属性を更新 {old_rId} -> {rId_map[old_rId]}")
+                                
+                                # その他のrId属性も更新
+                                for attr_name, attr_value in list(elem.attrib.items()):
+                                    if isinstance(attr_value, str) and attr_value.startswith('rId'):
+                                        if attr_value in rId_map:
+                                            elem.attrib[attr_name] = rId_map[attr_value]
+                                            updated_count += 1
+                                            print(f"  デバッグ: {attr_name}属性を更新 {attr_value} -> {rId_map[attr_value]}")
+                            
+                            if updated_count == 0 and used_rIds:
+                                print(f"  デバッグ: 警告: rIdマッピングが作成されませんでした (使用されたrId: {used_rIds})")
+                            elif updated_count > 0:
+                                print(f"  デバッグ: {updated_count}個のrId参照を更新しました")
+                        
+                        find_and_update_rids(new_shape_xml, dest_slide, source_slide)
+                    except Exception as e:
+                        # XML更新に失敗した場合は元のXMLを使用
+                        pass
+                
                 dest_slide.shapes._spTree.append(new_shape_xml)
         except Exception as e:
             # コピーできないシェイプはスキップ
@@ -625,4 +798,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
