@@ -1,0 +1,220 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{{ filename }} - QS printer</title>
+  <style>
+    * {
+      -webkit-user-select: none;
+      -moz-user-select: none;
+      -ms-user-select: none;
+      user-select: none;
+    }
+    body {
+      margin: 0;
+      padding: 10px;
+      text-align: center;
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background-color: #f5f5f5;
+    }
+    .page {
+      margin-bottom: 20px;
+      background: white;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+      padding: 10px;
+      display: inline-block;
+    }
+    img {
+      max-width: 100%;
+      height: auto;
+      -webkit-user-select: none;
+      -webkit-touch-callout: none;
+      -webkit-user-drag: none;
+      -khtml-user-drag: none;
+      -moz-user-drag: none;
+      -o-user-drag: none;
+      user-drag: none;
+      pointer-events: none;
+      display: block;
+    }
+    #toolbar {
+      position: sticky;
+      top: 0;
+      background: #f0f0f0;
+      padding: 12px;
+      border-bottom: 2px solid #ccc;
+      z-index: 10;
+      margin-bottom: 20px;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    }
+    #toolbar span {
+      margin: 0 10px;
+      font-weight: 500;
+    }
+    #toolbar button {
+      padding: 6px 16px;
+      background-color: #0078d4;
+      color: white;
+      border: none;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 14px;
+      font-weight: 500;
+    }
+    #toolbar button:hover {
+      background-color: #106ebe;
+    }
+    #toolbar button:active {
+      background-color: #005a9e;
+    }
+    @media print {
+      #toolbar {
+        display: none;
+      }
+      .page {
+        page-break-after: always;
+        page-break-inside: avoid;
+        box-shadow: none;
+        padding: 0;
+        margin: 0;
+        width: 100%;
+        max-width: 100%;
+        display: block;
+        overflow: hidden;
+      }
+      img {
+        max-width: 100% !important;
+        width: 100% !important;
+        height: auto !important;
+        object-fit: contain;
+        display: block;
+        page-break-inside: avoid;
+        page-break-after: auto;
+      }
+      body {
+        background-color: white;
+        padding: 0;
+        margin: 0;
+      }
+      @page {
+        margin: 0.5cm;
+      }
+    }
+  </style>
+</head>
+<body oncontextmenu="return false;" onselectstart="return false;" ondragstart="return false;">
+
+<div id="toolbar">
+  <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap;">
+    <div style="display: flex; align-items: center;">
+      <img src="/logo?v=1" alt="QS printer" style="max-width: 120px; max-height: 40px; height: auto; margin-right: 15px;" onerror="console.error('ロゴの読み込みに失敗しました')">
+      <span>ユーザー: {{ username }}</span> |
+      <span>ファイル: {{ filename }}</span>
+    </div>
+    <div>
+      生徒名:
+      <select id="student_name" onchange="updatePreview()" style="width:150px; padding: 4px 8px; border: 1px solid #ccc; border-radius: 4px; margin-right: 10px;">
+        <option value="">選択してください</option>
+        {% for student in students %}
+          <option value="{{ student.student_name }}" {% if selected_student_name == student.student_name %}selected{% endif %}>
+            {{ student.student_name }}{% if student.student_number %} ({{ student.student_number }}){% endif %}
+          </option>
+        {% endfor %}
+      </select>
+      <button onclick="printNow()">印刷</button>
+    </div>
+  </div>
+</div>
+
+<div id="pages">
+  {% for url in image_urls %}
+    <div class="page">
+      <img src="{{ url }}" alt="ページ {{ loop.index }}">
+    </div>
+  {% endfor %}
+</div>
+
+<script>
+// ダウンロード防止のための追加対策
+document.addEventListener('keydown', function(e) {
+  // Ctrl+S, Ctrl+P 以外の Ctrl+キーの組み合わせを無効化
+  if (e.ctrlKey && !e.shiftKey && e.key !== 'p' && e.key !== 'P' && e.key !== 's' && e.key !== 'S') {
+    e.preventDefault();
+  }
+  // F12 (開発者ツール) を無効化
+  if (e.key === 'F12') {
+    e.preventDefault();
+  }
+});
+
+// 右クリックメニュー無効化
+document.addEventListener('contextmenu', function(e) {
+  e.preventDefault();
+  return false;
+});
+
+// 画像のドラッグ&ドロップ無効化
+document.querySelectorAll('img').forEach(function(img) {
+  img.addEventListener('dragstart', function(e) {
+    e.preventDefault();
+    return false;
+  });
+});
+
+function updatePreview() {
+  // 生徒名が選択されたら、ページを再読み込みして画像を更新
+  const studentName = document.getElementById("student_name").value;
+  const currentUrl = new URL(window.location.href);
+  if (studentName) {
+    currentUrl.searchParams.set("student_name", studentName);
+  } else {
+    currentUrl.searchParams.delete("student_name");
+  }
+  window.location.href = currentUrl.toString();
+}
+
+function printNow() {
+  // 印刷ダイアログを表示
+  window.print();
+
+  // ログをサーバーに送信（印刷ボタンを押した回数 = 1回）
+  const studentName = document.getElementById("student_name").value.trim() || "";
+  const formData = new FormData();
+  formData.append("filename", "{{ filename }}");
+  formData.append("copies", "1");  // 印刷ボタンを押した回数として1回を記録
+  formData.append("student_name", studentName);
+
+  fetch("/log_print", {
+    method: "POST",
+    body: formData
+  }).then(response => {
+    if (!response.ok) {
+      console.error("ログ記録に失敗しました");
+    }
+  }).catch(e => {
+    console.error("log_print error:", e);
+  });
+}
+
+// ページ読み込み時に画像の読み込み完了を待つ
+window.addEventListener('load', function() {
+  const images = document.querySelectorAll('img');
+  let loadedCount = 0;
+  images.forEach(function(img) {
+    img.addEventListener('load', function() {
+      loadedCount++;
+      if (loadedCount === images.length) {
+        console.log('すべての画像が読み込まれました');
+      }
+    });
+    img.addEventListener('error', function() {
+      console.error('画像の読み込みに失敗しました:', img.src);
+    });
+  });
+});
+</script>
+
+</body>
+</html>
+

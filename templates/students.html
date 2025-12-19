@@ -1,0 +1,279 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>生徒登録 - QS printer</title>
+  <style>
+    body {
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      max-width: 800px;
+      margin: 0 auto;
+      padding: 20px;
+      background-color: #f5f5f5;
+    }
+    .container {
+      background: white;
+      padding: 30px;
+      border-radius: 8px;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    }
+    h1 {
+      color: #333;
+      margin-bottom: 30px;
+      border-bottom: 2px solid #0078d4;
+      padding-bottom: 10px;
+    }
+    .user-info {
+      text-align: right;
+      color: #666;
+      font-size: 14px;
+      margin-bottom: 20px;
+    }
+    .user-info a {
+      color: #666;
+      text-decoration: none;
+      margin: 0 5px;
+    }
+    .user-info a:hover {
+      color: #0078d4;
+    }
+    .form-section {
+      background: #f9f9f9;
+      padding: 20px;
+      border-radius: 4px;
+      margin-bottom: 30px;
+    }
+    .form-group {
+      margin-bottom: 15px;
+    }
+    .form-group label {
+      display: block;
+      margin-bottom: 5px;
+      font-weight: 500;
+      color: #333;
+    }
+    .form-group input {
+      width: 100%;
+      padding: 8px 12px;
+      border: 1px solid #ccc;
+      border-radius: 4px;
+      font-size: 14px;
+      box-sizing: border-box;
+    }
+    .form-group input:focus {
+      outline: none;
+      border-color: #0078d4;
+    }
+    .button-group {
+      display: flex;
+      gap: 10px;
+    }
+    button {
+      padding: 8px 20px;
+      background-color: #0078d4;
+      color: white;
+      border: none;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 14px;
+      font-weight: 500;
+    }
+    button:hover {
+      background-color: #106ebe;
+    }
+    button:active {
+      background-color: #005a9e;
+    }
+    button.secondary {
+      background-color: #6c757d;
+    }
+    button.secondary:hover {
+      background-color: #5a6268;
+    }
+    button.danger {
+      background-color: #dc3545;
+    }
+    button.danger:hover {
+      background-color: #c82333;
+    }
+    .students-list {
+      margin-top: 30px;
+    }
+    .students-list h2 {
+      color: #333;
+      margin-bottom: 20px;
+      font-size: 20px;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      background: white;
+    }
+    th, td {
+      padding: 12px;
+      text-align: left;
+      border-bottom: 1px solid #ddd;
+    }
+    th {
+      background-color: #f8f9fa;
+      font-weight: 600;
+      color: #333;
+    }
+    tr:hover {
+      background-color: #f8f9fa;
+    }
+    .actions {
+      display: flex;
+      gap: 5px;
+    }
+    .flash-messages {
+      margin-bottom: 20px;
+    }
+    .flash {
+      padding: 12px 20px;
+      border-radius: 4px;
+      margin-bottom: 10px;
+    }
+    .flash.success {
+      background-color: #d4edda;
+      color: #155724;
+      border: 1px solid #c3e6cb;
+    }
+    .flash.error {
+      background-color: #f8d7da;
+      color: #721c24;
+      border: 1px solid #f5c6cb;
+    }
+    .empty-message {
+      text-align: center;
+      color: #666;
+      padding: 40px;
+      font-style: italic;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="user-info">
+      ユーザー: {{ username }} | 
+      <a href="/">QS一覧に戻る</a> | 
+      <a href="/students">生徒登録</a> | 
+      <a href="/logs">📋 印刷ログ</a> | 
+      <a href="/logout">ログアウト</a>
+    </div>
+
+    <h1>👥 生徒登録</h1>
+
+    {% with messages = get_flashed_messages(with_categories=true) %}
+      {% if messages %}
+        <div class="flash-messages">
+          {% for category, message in messages %}
+            <div class="flash {{ category }}">{{ message }}</div>
+          {% endfor %}
+        </div>
+      {% endif %}
+    {% endwith %}
+
+    <div class="form-section">
+      <h2>新規登録・編集</h2>
+      <form method="POST" action="/students" id="studentForm">
+        <input type="hidden" name="action" id="action" value="add">
+        <div class="form-group">
+          <label for="student_name">生徒名 *</label>
+          <input type="text" id="student_name" name="student_name" required>
+        </div>
+        <div class="form-group">
+          <label for="student_number">生徒番号</label>
+          <input type="text" id="student_number" name="student_number" placeholder="任意">
+        </div>
+        <div class="button-group">
+          <button type="submit" id="submitBtn">登録</button>
+          <button type="button" class="secondary" onclick="resetForm()">リセット</button>
+        </div>
+      </form>
+    </div>
+
+    <div class="students-list">
+      <h2>登録済み生徒一覧</h2>
+      {% if students %}
+        <table>
+          <thead>
+            <tr>
+              <th>生徒名</th>
+              <th>生徒番号</th>
+              <th>操作</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for student in students %}
+            <tr>
+              <td>{{ student.student_name }}</td>
+              <td>{{ student.student_number or '-' }}</td>
+              <td class="actions">
+                <button type="button" class="secondary" onclick="editStudent('{{ student.student_name }}', '{{ student.student_number or '' }}')">編集</button>
+                <button type="button" class="danger" onclick="deleteStudent('{{ student.student_name }}')">削除</button>
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      {% else %}
+        <div class="empty-message">まだ生徒が登録されていません。</div>
+      {% endif %}
+    </div>
+  </div>
+
+  <script>
+    function editStudent(name, number) {
+      document.getElementById('student_name').value = name;
+      document.getElementById('student_number').value = number;
+      document.getElementById('action').value = 'edit';
+      document.getElementById('submitBtn').textContent = '更新';
+      document.getElementById('student_name').scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
+
+    function deleteStudent(name) {
+      if (confirm(`生徒「${name}」を削除してもよろしいですか？`)) {
+        const form = document.createElement('form');
+        form.method = 'POST';
+        form.action = '/students';
+        
+        const actionInput = document.createElement('input');
+        actionInput.type = 'hidden';
+        actionInput.name = 'action';
+        actionInput.value = 'delete';
+        form.appendChild(actionInput);
+        
+        const nameInput = document.createElement('input');
+        nameInput.type = 'hidden';
+        nameInput.name = 'student_name';
+        nameInput.value = name;
+        form.appendChild(nameInput);
+        
+        document.body.appendChild(form);
+        form.submit();
+      }
+    }
+
+    function resetForm() {
+      document.getElementById('studentForm').reset();
+      document.getElementById('action').value = 'add';
+      document.getElementById('submitBtn').textContent = '登録';
+    }
+
+    // フォーム送信時のバリデーション
+    document.getElementById('studentForm').addEventListener('submit', function(e) {
+      const studentName = document.getElementById('student_name').value.trim();
+      if (!studentName) {
+        e.preventDefault();
+        alert('生徒名を入力してください。');
+        return false;
+      }
+    });
+  </script>
+</body>
+</html>
+
+
+

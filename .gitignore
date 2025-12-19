@@ -1,0 +1,46 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Flask
+instance/
+.webassets-cache
+
+# Cache and logs
+cache/
+logs/*.csv
+*.log
+
+# User data (sensitive)
+users.csv
+students/
+*.csv
+
+# Environment
+.env
+.venv
+env/
+venv/
+ENV/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Test PDFs (optional - remove if you want to include them)
+test_pdfs/
+
+# Backup files
+*.backup
+*.bak
+
