@@ -7,11 +7,12 @@ from datetime import datetime
 from urllib.parse import quote, unquote
 from functools import wraps
 
-from flask import Flask, render_template, send_file, request, abort, session, redirect, url_for, flash
+from flask import Flask, render_template, send_file, request, abort, session, redirect, url_for, flash, jsonify
 from pdf2image import convert_from_path
 from werkzeug.security import generate_password_hash, check_password_hash
 from PIL import ImageDraw, ImageFont, Image
 import qrcode
+import fitz  # PyMuPDF
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("SECRET_KEY", "your-secret-key-change-this-in-production")
@@ -643,17 +644,9 @@ def folder_view(folder_path=""):
         # 正規化されたファイルパスでマッピング情報を取得
         matched_mappings = []
         
-        # デバッグ用：最初の数個のキーを出力
-        if file == files[0] if files else None:
-            sample_keys = list(text_mappings.keys())[:3]
-            print(f"DEBUG: Looking for file_path='{file_path}', file='{file}'")
-            print(f"DEBUG: Sample saved paths: {sample_keys}")
-        
         # 完全一致で検索
         if file_path in text_mappings:
             matched_mappings = text_mappings[file_path]
-            print(f"DEBUG: Exact match found for '{file_path}', mappings count: {len(matched_mappings)}")
-            print(f"DEBUG: Mappings content: {matched_mappings}")
         else:
             # ファイル名だけで検索（フォルダパスが異なる場合に対応）
             matched_by_filename = False
@@ -663,8 +656,6 @@ def folder_view(folder_path=""):
                 # ファイル名が一致するか確認
                 if saved_filename == file:
                     matched_mappings = mappings_list
-                    print(f"DEBUG: Matched by filename: saved_path='{saved_path}', saved_filename='{saved_filename}', current_file='{file}', mappings count: {len(matched_mappings)}")
-                    print(f"DEBUG: Mappings content: {matched_mappings}")
                     matched_by_filename = True
                     break
             
@@ -675,7 +666,6 @@ def folder_view(folder_path=""):
                 folder_mappings = find_mappings_by_folder_and_index(folder_path_for_search, 0, text_mappings, files)
                 if folder_mappings:
                     matched_mappings = folder_mappings
-                    print(f"DEBUG: Matched by folder (single file): folder='{folder_path_for_search}', mappings count: {len(matched_mappings)}")
         
         file_text_mappings[file] = matched_mappings
     
@@ -690,6 +680,221 @@ def folder_view(folder_path=""):
         file_text_mappings=file_text_mappings,  # ファイルごとのテキスト対応情報
         username=session.get("username", "unknown")
     )
+
+
+@app.route("/api/integrate-pdf", methods=["POST"])
+@login_required
+def integrate_pdf():
+    """選択されたページを統合してPDFを生成（複数ファイル対応）"""
+    data = request.get_json()
+    # 新しい形式: file_selections = [{"filename": "...", "selections": [...]}, ...]
+    # 旧形式（後方互換性のため）: filename, selections
+    file_selections = data.get("file_selections", [])
+    
+    # 旧形式の場合は新しい形式に変換
+    if not file_selections and data.get("filename"):
+        file_selections = [{
+            "filename": data.get("filename"),
+            "selections": data.get("selections", [])
+        }]
+    
+    if not file_selections:
+        return jsonify({"success": False, "error": "選択されたページがありません"}), 400
+    
+    try:
+        # 統合PDFを作成（表紙 → 問題 → 解答の順）
+        integrated_pdf = fitz.open()
+        cover_pages_list = []
+        question_pages_list = []
+        answer_pages_list = []
+        
+        # PDFファイルを一度だけ開いて再利用
+        opened_pdfs = {}
+        
+        # 各ファイルから選択されたページを収集
+        for file_sel in file_selections:
+            filename = file_sel.get("filename", "")
+            selections = file_sel.get("selections", [])
+            
+            if not filename or not selections:
+                continue
+            
+            # URLデコード
+            decoded_filename = unquote(filename)
+            pdf_path = os.path.join(PDF_DIR, decoded_filename)
+            
+            if not os.path.exists(pdf_path):
+                continue
+            
+            # PDFを開く（既に開いている場合は再利用）
+            if decoded_filename not in opened_pdfs:
+                opened_pdfs[decoded_filename] = fitz.open(pdf_path)
+            
+            source_pdf = opened_pdfs[decoded_filename]
+            
+            # 問題ページと解答ページを分ける
+            for sel in selections:
+                page_num = sel["page"] - 1  # 0-indexed
+                page_type = sel["type"]
+                
+                if page_num >= 0 and page_num < len(source_pdf):
+                    page_info = {
+                        "source_pdf": source_pdf,
+                        "page_num": page_num,
+                        "filename": decoded_filename
+                    }
+                    
+                    if page_type == "question":
+                        question_pages_list.append(page_info)
+                    elif page_type == "answer":
+                        answer_pages_list.append(page_info)
+                    elif page_type == "cover":
+                        cover_pages_list.append(page_info)
+        
+        def add_page_with_crop(pdf_doc, page_info):
+            """ページを追加"""
+            source_pdf = page_info["source_pdf"]
+            page_num = page_info["page_num"]
+            
+            # 全体を追加
+            pdf_doc.insert_pdf(source_pdf, from_page=page_num, to_page=page_num)
+        
+        def add_pages_grouped(pdf_doc, pages_list):
+            """ページリストを追加"""
+            sorted_pages = sorted(pages_list, key=lambda x: (x["filename"], x["page_num"]))
+            for page_info in sorted_pages:
+                add_page_with_crop(pdf_doc, page_info)
+        
+        # 表紙を追加
+        add_pages_grouped(integrated_pdf, cover_pages_list)
+        
+        # 問題ページを追加
+        add_pages_grouped(integrated_pdf, question_pages_list)
+        
+        # 解答ページを追加
+        add_pages_grouped(integrated_pdf, answer_pages_list)
+        
+        # すべてのソースPDFを閉じる
+        for pdf in opened_pdfs.values():
+            pdf.close()
+        
+        # 統合PDFを一時ファイルとして保存
+        user = get_current_user()
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        integrated_filename = f"integrated_{user}_{timestamp}.pdf"
+        integrated_path = os.path.join(CACHE_DIR, integrated_filename)
+        
+        integrated_pdf.save(integrated_path)
+        integrated_pdf.close()
+        
+        return jsonify({
+            "success": True,
+            "integrated_filename": integrated_filename
+        })
+        
+    except Exception as e:
+        import traceback
+        print(f"統合エラー: {e}")
+        print(f"トレースバック:\n{traceback.format_exc()}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/view-integrated/<filename>")
+@login_required
+def view_integrated(filename):
+    """統合PDFのプレビュー表示"""
+    # セキュリティチェック
+    if ".." in filename or filename.startswith("\\") or filename.startswith("/"):
+        abort(400)
+    
+    integrated_path = os.path.join(CACHE_DIR, filename)
+    if not os.path.exists(integrated_path):
+        abort(404, description="統合PDFファイルが見つかりません")
+    
+    # 統合PDFを元のPDFディレクトリに一時的にコピーして、既存のview関数を使う
+    # または、統合PDF専用の処理を実装
+    user = get_current_user()
+    
+    # 生徒データを取得
+    students = load_students(user)
+    
+    # クエリパラメータから生徒名を取得
+    selected_student_name = request.args.get("student_name", "")
+    selected_student_number = ""
+    if selected_student_name:
+        for student in students:
+            if student["student_name"] == selected_student_name:
+                selected_student_number = student.get("student_number", "")
+                break
+    
+    # 統合PDFを一時的にPDF_DIRにコピーして処理
+    import shutil
+    temp_pdf_name = f"temp_{filename}"
+    temp_pdf_path = os.path.join(PDF_DIR, temp_pdf_name)
+    shutil.copy2(integrated_path, temp_pdf_path)
+    
+    try:
+        # 画像に変換
+        image_paths = pdf_to_images(
+            temp_pdf_name,
+            username=user,
+            student_name=selected_student_name if selected_student_name else None,
+            student_number=selected_student_number if selected_student_number else None,
+            text_name=None
+        )
+    except Exception as e:
+        # 一時ファイルを削除
+        if os.path.exists(temp_pdf_path):
+            os.remove(temp_pdf_path)
+        return f"画像変換エラー: {e}", 500
+    
+    base, _ = os.path.splitext(temp_pdf_name)
+    image_urls = []
+    for p in image_paths:
+        img_name = os.path.basename(p)
+        base_parts = base.split(os.sep)
+        base_encoded = "/".join([quote(part, safe="") for part in base_parts])
+        image_urls.append(f"/image/{base_encoded}/{quote(img_name, safe='')}")
+    
+    # 一時ファイルを削除
+    if os.path.exists(temp_pdf_path):
+        os.remove(temp_pdf_path)
+    
+    return render_template(
+        "view.html",
+        username=user,
+        filename=filename,
+        image_urls=image_urls,
+        students=students,
+        selected_student_name=selected_student_name,
+        is_integrated=True
+    )
+
+
+@app.route("/api/delete-integrated-pdf", methods=["POST"])
+@login_required
+def delete_integrated_pdf():
+    """統合PDFを削除"""
+    data = request.get_json()
+    filename = data.get("filename", "")
+    
+    if not filename:
+        return jsonify({"success": False, "error": "ファイル名が指定されていません"}), 400
+    
+    # セキュリティチェック
+    if ".." in filename or filename.startswith("\\") or filename.startswith("/"):
+        return jsonify({"success": False, "error": "無効なファイル名です"}), 400
+    
+    # 統合PDFファイルを削除
+    integrated_path = os.path.join(CACHE_DIR, filename)
+    if os.path.exists(integrated_path) and filename.startswith("integrated_"):
+        try:
+            os.remove(integrated_path)
+            return jsonify({"success": True})
+        except Exception as e:
+            return jsonify({"success": False, "error": str(e)}), 500
+    else:
+        return jsonify({"success": False, "error": "ファイルが見つかりません"}), 404
 
 
 @app.route("/view/<path:filename>")
@@ -750,6 +955,7 @@ def view(filename):
         image_urls=image_urls,
         students=students,
         selected_student_name=selected_student_name,
+        is_integrated=False
     )
 
 
