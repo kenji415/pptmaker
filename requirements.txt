@@ -8,3 +8,4 @@ pymupdf>=1.23.0
 opencv-python>=4.8.0
 numpy>=1.24.0
 pywin32>=306
+python-pptx>=0.6.21
