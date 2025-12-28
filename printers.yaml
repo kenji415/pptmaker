@@ -1,0 +1,16 @@
+# 校舎別プリンタ設定
+# フォルダ名 = キーとして使用
+
+yotsuya:
+  printer_name: "RICOH_MP_C6004_YOTSUYA"
+  max_copies: 5
+
+jiyugaoka:
+  printer_name: "Canon_iR_ADV_JIYUGAOKA"
+  max_copies: 5
+
+kichijoji:
+  printer_name: "EPSON_BIZ_KICHIJOJI"
+  max_copies: 5
+
+

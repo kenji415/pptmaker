@@ -3,6 +3,7 @@ import csv
 import re
 import locale
 import hashlib
+import uuid
 from datetime import datetime
 from urllib.parse import quote, unquote
 from functools import wraps
@@ -32,6 +33,7 @@ USERS_FILE = os.path.join(BASE_DIR, "users.csv")
 STUDENTS_DIR = os.path.join(BASE_DIR, "students")
 TEXT_MAPPING_FILE = os.path.join(BASE_DIR, "text_mapping.csv")
 FILE_NAME_HISTORY_FILE = os.path.join(BASE_DIR, "file_name_history.csv")
+PRINT_ID_MAPPING_FILE = os.path.join(BASE_DIR, "print_id_mapping.csv")
 
 # 必要なディレクトリを作成
 os.makedirs(STUDENTS_DIR, exist_ok=True)
@@ -80,6 +82,14 @@ def login_required(f):
     return decorated_function
 
 
+def generate_print_id():
+    """一意なPRINT_IDを生成（形式: QS_YYYY_NNNNN）"""
+    year = datetime.now().strftime("%Y")
+    # 短い一意ID（UUIDの最初の5文字 + タイムスタンプの一部）
+    unique_part = hashlib.md5(uuid.uuid4().bytes + datetime.now().isoformat().encode()).hexdigest()[:5].upper()
+    return f"QS_{year}_{unique_part}"
+
+
 def pdf_to_images(filename, username=None, student_name=None, student_number=None, text_name=None):
     """PDFを画像に変換"""
     # URLデコード
@@ -96,8 +106,8 @@ def pdf_to_images(filename, username=None, student_name=None, student_number=Non
     os.makedirs(out_dir, exist_ok=True)
 
     # キャッシュキーを生成（ユーザー名、生徒名、生徒番号、テキスト名を含む）
-    # バージョン4: 黄色背景なし、画面下中央配置、生徒番号0.61、QRコード追加
-    cache_key = f"v4_{username or ''}_{student_name or ''}_{student_number or ''}_{text_name or ''}"
+    # バージョン6: QRコード重複修正、生徒名表示削除
+    cache_key = f"v6_{username or ''}_{student_name or ''}_{student_number or ''}_{text_name or ''}"
     cache_suffix = ""
     if cache_key.strip():
         # ハッシュ値を生成してキャッシュサフィックスとして使用
@@ -121,8 +131,8 @@ def pdf_to_images(filename, username=None, student_name=None, student_number=Non
     images = convert_from_path(pdf_path, poppler_path=POPPLER_PATH)
     image_paths = []
     for i, img in enumerate(images, start=1):
-        # 1枚目でユーザー名または生徒情報が指定されている場合、テキストを描画
-        if i == 1 and (username or student_name or student_number):
+        # 1枚目でテキスト名がある場合、またはユーザー名/生徒情報が指定されている場合、テキストを描画
+        if i == 1 and (username or student_name or student_number or text_name):
             try:
                 draw = ImageDraw.Draw(img)
                 img_width, img_height = img.size
@@ -146,9 +156,9 @@ def pdf_to_images(filename, username=None, student_name=None, student_number=Non
                 if font is None:
                     font = ImageFont.load_default()
                 
-                # 生徒番号を画面下中央の0.61の位置に描画
+                # 生徒番号を画面下中央の0.61の位置に描画（生徒番号がある場合のみ）
                 if student_number:
-                    student_number_text = student_number  # 「生徒番号：」を削除
+                    student_number_text = student_number
                     bbox = draw.textbbox((0, 0), student_number_text, font=font)
                     text_width = bbox[2] - bbox[0]
                     text_height = bbox[3] - bbox[1]
@@ -165,9 +175,9 @@ def pdf_to_images(filename, username=None, student_name=None, student_number=Non
                         font=font
                     )
                 
-                # ユーザー名を画面下中央の0.73の位置に描画
+                # ユーザー名（講師名）を画面下中央の0.73の位置に描画
                 if username:
-                    username_text = username  # 「ユーザー：」を削除
+                    username_text = username
                     bbox = draw.textbbox((0, 0), username_text, font=font)
                     text_width = bbox[2] - bbox[0]
                     text_height = bbox[3] - bbox[1]
@@ -184,11 +194,22 @@ def pdf_to_images(filename, username=None, student_name=None, student_number=Non
                         font=font
                     )
                 
-                # QRコードを生成して左下に配置
-                if student_name and username and text_name:
+                # QRコードを生成して左下に配置（PRINT_ID形式）
+                # ※QRコードにはPRINT_IDのみを含み、生徒名・講師名は含まない
+                # テキスト名とユーザー名があれば常にQRコードを表示（生徒名選択は不要）
+                if username and text_name:
                     try:
-                        # QRコードのデータ: 生徒名,講師名,テキスト名
-                        qr_data = f"{student_name},{username},{text_name}"
+                        # PRINT_IDを生成（一意なID）
+                        print_id = generate_print_id()
+                        
+                        # 元のファイル名を取得（パス区切り文字を考慮）
+                        original_filename = unquote(filename) if '%' in filename else filename
+                        
+                        # PRINT_IDとファイル名のマッピングを保存
+                        save_print_id_mapping(print_id, original_filename)
+                        
+                        # QRコードのデータ: PRINT_ID=QS_YYYY_NNNNN,FILE=元のファイル名
+                        qr_data = f"PRINT_ID={print_id},FILE={original_filename}"
                         
                         # QRコードを生成
                         qr = qrcode.QRCode(
@@ -207,13 +228,49 @@ def pdf_to_images(filename, username=None, student_name=None, student_number=Non
                         qr_size = int(min(img_width, img_height) * 0.1)
                         qr_img = qr_img.resize((qr_size, qr_size), Image.Resampling.LANCZOS)
                         
-                        # 左下に配置（マージンを考慮）
+                        # QRコードの下にテキストIDを表示するためのフォントを準備
+                        # テキスト用フォント（QRコードより小さく）
+                        text_font_size = max(14, int(img_width / 80))
+                        text_font = None
+                        for font_path in font_paths:
+                            try:
+                                text_font = ImageFont.truetype(font_path, text_font_size)
+                                break
+                            except Exception:
+                                continue
+                        if text_font is None:
+                            text_font = ImageFont.load_default()
+                        
+                        # PRINT_IDのテキストのサイズを取得
+                        text_id = print_id  # テキストIDとしてPRINT_IDを使用
+                        text_bbox = draw.textbbox((0, 0), text_id, font=text_font)
+                        text_text_width = text_bbox[2] - text_bbox[0]
+                        text_text_height = text_bbox[3] - text_bbox[1]
+                        
+                        # テキストの高さを考慮してQRコードの位置を決定
+                        bottom_margin = 15  # 画面下端との最小余白
+                        text_margin = 10  # QRコードとテキストの間のマージン
+                        total_height = qr_size + text_margin + text_text_height + bottom_margin
+                        
+                        # 左下に配置（マージンを考慮、テキスト分のスペースを確保）
                         margin = 20
                         qr_x = margin
-                        qr_y = img_height - qr_size - margin
+                        qr_y = img_height - total_height + bottom_margin
                         
-                        # QRコードを画像に貼り付け
-                        img.paste(qr_img, (qr_x, qr_y))
+                        # QRコードを画像に貼り付け（一度だけ）
+                        img.paste(qr_img, (int(qr_x), int(qr_y)))
+                        
+                        # QRコードの下、中央揃えでテキストを配置
+                        text_x = qr_x + (qr_size - text_text_width) / 2
+                        text_y = qr_y + qr_size + text_margin
+                        
+                        # テキストを描画
+                        draw.text(
+                            (int(text_x), int(text_y)),
+                            text_id,
+                            fill=(0, 0, 0, 255),
+                            font=text_font
+                        )
                         
                     except Exception as e:
                         import traceback
@@ -373,6 +430,35 @@ def save_file_name_history(history):
                     "old_path": old_path,
                     "current_path": current_path
                 })
+
+
+def save_print_id_mapping(print_id: str, filename: str):
+    """PRINT_IDとファイル名のマッピングを保存"""
+    file_exists = os.path.exists(PRINT_ID_MAPPING_FILE)
+    
+    # 既存のマッピングを読み込む
+    existing_mappings = {}
+    if file_exists:
+        try:
+            with open(PRINT_ID_MAPPING_FILE, "r", encoding="utf-8", newline="") as f:
+                reader = csv.DictReader(f)
+                for row in reader:
+                    existing_mappings[row["print_id"]] = row["filename"]
+        except Exception as e:
+            print(f"マッピングファイル読み込みエラー: {e}")
+    
+    # 新しいマッピングを追加（既に存在する場合は更新）
+    existing_mappings[print_id] = filename
+    
+    # 保存
+    with open(PRINT_ID_MAPPING_FILE, "w", encoding="utf-8", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=["print_id", "filename"])
+        writer.writeheader()
+        for pid, fname in existing_mappings.items():
+            writer.writerow({
+                "print_id": pid,
+                "filename": fname
+            })
 
 
 def find_mappings_by_folder_and_index(folder_path, file_index, text_mappings, all_files_in_folder):
@@ -682,221 +768,6 @@ def folder_view(folder_path=""):
     )
 
 
-@app.route("/api/integrate-pdf", methods=["POST"])
-@login_required
-def integrate_pdf():
-    """選択されたページを統合してPDFを生成（複数ファイル対応）"""
-    data = request.get_json()
-    # 新しい形式: file_selections = [{"filename": "...", "selections": [...]}, ...]
-    # 旧形式（後方互換性のため）: filename, selections
-    file_selections = data.get("file_selections", [])
-    
-    # 旧形式の場合は新しい形式に変換
-    if not file_selections and data.get("filename"):
-        file_selections = [{
-            "filename": data.get("filename"),
-            "selections": data.get("selections", [])
-        }]
-    
-    if not file_selections:
-        return jsonify({"success": False, "error": "選択されたページがありません"}), 400
-    
-    try:
-        # 統合PDFを作成（表紙 → 問題 → 解答の順）
-        integrated_pdf = fitz.open()
-        cover_pages_list = []
-        question_pages_list = []
-        answer_pages_list = []
-        
-        # PDFファイルを一度だけ開いて再利用
-        opened_pdfs = {}
-        
-        # 各ファイルから選択されたページを収集
-        for file_sel in file_selections:
-            filename = file_sel.get("filename", "")
-            selections = file_sel.get("selections", [])
-            
-            if not filename or not selections:
-                continue
-            
-            # URLデコード
-            decoded_filename = unquote(filename)
-            pdf_path = os.path.join(PDF_DIR, decoded_filename)
-            
-            if not os.path.exists(pdf_path):
-                continue
-            
-            # PDFを開く（既に開いている場合は再利用）
-            if decoded_filename not in opened_pdfs:
-                opened_pdfs[decoded_filename] = fitz.open(pdf_path)
-            
-            source_pdf = opened_pdfs[decoded_filename]
-            
-            # 問題ページと解答ページを分ける
-            for sel in selections:
-                page_num = sel["page"] - 1  # 0-indexed
-                page_type = sel["type"]
-                
-                if page_num >= 0 and page_num < len(source_pdf):
-                    page_info = {
-                        "source_pdf": source_pdf,
-                        "page_num": page_num,
-                        "filename": decoded_filename
-                    }
-                    
-                    if page_type == "question":
-                        question_pages_list.append(page_info)
-                    elif page_type == "answer":
-                        answer_pages_list.append(page_info)
-                    elif page_type == "cover":
-                        cover_pages_list.append(page_info)
-        
-        def add_page_with_crop(pdf_doc, page_info):
-            """ページを追加"""
-            source_pdf = page_info["source_pdf"]
-            page_num = page_info["page_num"]
-            
-            # 全体を追加
-            pdf_doc.insert_pdf(source_pdf, from_page=page_num, to_page=page_num)
-        
-        def add_pages_grouped(pdf_doc, pages_list):
-            """ページリストを追加"""
-            sorted_pages = sorted(pages_list, key=lambda x: (x["filename"], x["page_num"]))
-            for page_info in sorted_pages:
-                add_page_with_crop(pdf_doc, page_info)
-        
-        # 表紙を追加
-        add_pages_grouped(integrated_pdf, cover_pages_list)
-        
-        # 問題ページを追加
-        add_pages_grouped(integrated_pdf, question_pages_list)
-        
-        # 解答ページを追加
-        add_pages_grouped(integrated_pdf, answer_pages_list)
-        
-        # すべてのソースPDFを閉じる
-        for pdf in opened_pdfs.values():
-            pdf.close()
-        
-        # 統合PDFを一時ファイルとして保存
-        user = get_current_user()
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        integrated_filename = f"integrated_{user}_{timestamp}.pdf"
-        integrated_path = os.path.join(CACHE_DIR, integrated_filename)
-        
-        integrated_pdf.save(integrated_path)
-        integrated_pdf.close()
-        
-        return jsonify({
-            "success": True,
-            "integrated_filename": integrated_filename
-        })
-        
-    except Exception as e:
-        import traceback
-        print(f"統合エラー: {e}")
-        print(f"トレースバック:\n{traceback.format_exc()}")
-        return jsonify({"success": False, "error": str(e)}), 500
-
-
-@app.route("/view-integrated/<filename>")
-@login_required
-def view_integrated(filename):
-    """統合PDFのプレビュー表示"""
-    # セキュリティチェック
-    if ".." in filename or filename.startswith("\\") or filename.startswith("/"):
-        abort(400)
-    
-    integrated_path = os.path.join(CACHE_DIR, filename)
-    if not os.path.exists(integrated_path):
-        abort(404, description="統合PDFファイルが見つかりません")
-    
-    # 統合PDFを元のPDFディレクトリに一時的にコピーして、既存のview関数を使う
-    # または、統合PDF専用の処理を実装
-    user = get_current_user()
-    
-    # 生徒データを取得
-    students = load_students(user)
-    
-    # クエリパラメータから生徒名を取得
-    selected_student_name = request.args.get("student_name", "")
-    selected_student_number = ""
-    if selected_student_name:
-        for student in students:
-            if student["student_name"] == selected_student_name:
-                selected_student_number = student.get("student_number", "")
-                break
-    
-    # 統合PDFを一時的にPDF_DIRにコピーして処理
-    import shutil
-    temp_pdf_name = f"temp_{filename}"
-    temp_pdf_path = os.path.join(PDF_DIR, temp_pdf_name)
-    shutil.copy2(integrated_path, temp_pdf_path)
-    
-    try:
-        # 画像に変換
-        image_paths = pdf_to_images(
-            temp_pdf_name,
-            username=user,
-            student_name=selected_student_name if selected_student_name else None,
-            student_number=selected_student_number if selected_student_number else None,
-            text_name=None
-        )
-    except Exception as e:
-        # 一時ファイルを削除
-        if os.path.exists(temp_pdf_path):
-            os.remove(temp_pdf_path)
-        return f"画像変換エラー: {e}", 500
-    
-    base, _ = os.path.splitext(temp_pdf_name)
-    image_urls = []
-    for p in image_paths:
-        img_name = os.path.basename(p)
-        base_parts = base.split(os.sep)
-        base_encoded = "/".join([quote(part, safe="") for part in base_parts])
-        image_urls.append(f"/image/{base_encoded}/{quote(img_name, safe='')}")
-    
-    # 一時ファイルを削除
-    if os.path.exists(temp_pdf_path):
-        os.remove(temp_pdf_path)
-    
-    return render_template(
-        "view.html",
-        username=user,
-        filename=filename,
-        image_urls=image_urls,
-        students=students,
-        selected_student_name=selected_student_name,
-        is_integrated=True
-    )
-
-
-@app.route("/api/delete-integrated-pdf", methods=["POST"])
-@login_required
-def delete_integrated_pdf():
-    """統合PDFを削除"""
-    data = request.get_json()
-    filename = data.get("filename", "")
-    
-    if not filename:
-        return jsonify({"success": False, "error": "ファイル名が指定されていません"}), 400
-    
-    # セキュリティチェック
-    if ".." in filename or filename.startswith("\\") or filename.startswith("/"):
-        return jsonify({"success": False, "error": "無効なファイル名です"}), 400
-    
-    # 統合PDFファイルを削除
-    integrated_path = os.path.join(CACHE_DIR, filename)
-    if os.path.exists(integrated_path) and filename.startswith("integrated_"):
-        try:
-            os.remove(integrated_path)
-            return jsonify({"success": True})
-        except Exception as e:
-            return jsonify({"success": False, "error": str(e)}), 500
-    else:
-        return jsonify({"success": False, "error": "ファイルが見つかりません"}), 404
-
-
 @app.route("/view/<path:filename>")
 @login_required
 def view(filename):
@@ -934,7 +805,7 @@ def view(filename):
             username=user,
             student_name=selected_student_name if selected_student_name else None,
             student_number=selected_student_number if selected_student_number else None,
-            text_name=text_name if selected_student_name else None
+            text_name=text_name  # 生徒名選択に関係なく常に渡す
         )
     except Exception as e:
         return f"画像変換エラー: {e}", 500
@@ -948,6 +819,14 @@ def view(filename):
         base_encoded = "/".join([quote(part, safe="") for part in base_parts])
         image_urls.append(f"/image/{base_encoded}/{quote(img_name, safe='')}")
 
+    # 親フォルダのパスを取得（一つ前のフォルダ一覧に戻るため）
+    parent_folder_path = ""
+    if os.sep in decoded_filename or "/" in decoded_filename:
+        # パス区切り文字で分割して、最後のファイル名を除く
+        path_parts = decoded_filename.replace("\\", "/").split("/")
+        if len(path_parts) > 1:
+            parent_folder_path = "/".join(path_parts[:-1])
+    
     return render_template(
         "view.html",
         username=user,
@@ -955,7 +834,7 @@ def view(filename):
         image_urls=image_urls,
         students=students,
         selected_student_name=selected_student_name,
-        is_integrated=False
+        parent_folder_path=parent_folder_path
     )
 
 

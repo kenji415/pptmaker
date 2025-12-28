@@ -68,46 +68,10 @@
     #toolbar button:active {
       background-color: #005a9e;
     }
-    .integrate-mode-controls {
-      display: none;
-      margin-top: 10px;
-      padding-top: 10px;
-      border-top: 1px solid #ccc;
-    }
-    .integrate-mode-controls.active {
-      display: block;
-    }
     .page-wrapper {
       position: relative;
       display: inline-block;
       margin-bottom: 20px;
-    }
-    .page-controls {
-      position: absolute;
-      top: 10px;
-      left: 10px;
-      display: flex;
-      gap: 5px;
-      align-items: center;
-      z-index: 5;
-    }
-    .page-controls input[type="checkbox"] {
-      width: 20px;
-      height: 20px;
-      cursor: pointer;
-    }
-    .page-controls select {
-      padding: 4px 8px;
-      border: 1px solid #ccc;
-      border-radius: 4px;
-      font-size: 12px;
-      cursor: pointer;
-      background: white;
-    }
-    .selected-count {
-      margin-left: 10px;
-      font-weight: 600;
-      color: #0078d4;
     }
     #toolbar button.secondary {
       background-color: #6c757d;
@@ -125,12 +89,31 @@
       #toolbar {
         display: none;
       }
+      #toolbar a {
+        display: none;
+      }
       .page-controls {
         display: none;
       }
-      .page {
+      #pages {
+        display: block;
+      }
+      .page-wrapper {
+        display: block !important;
+        margin: 0;
+        padding: 0;
         page-break-after: always;
         page-break-inside: avoid;
+        break-after: page;
+        break-inside: avoid;
+      }
+      .page-wrapper:last-child {
+        page-break-after: auto;
+        break-after: auto;
+      }
+      .page {
+        page-break-inside: avoid;
+        break-inside: avoid;
         box-shadow: none;
         padding: 0;
         margin: 0;
@@ -141,20 +124,23 @@
       }
       img {
         max-width: 100% !important;
-        width: 100% !important;
+        max-height: calc(100vh - 1cm) !important;
+        width: auto !important;
         height: auto !important;
         object-fit: contain;
         display: block;
         page-break-inside: avoid;
-        page-break-after: auto;
+        break-inside: avoid;
       }
       body {
         background-color: white;
         padding: 0;
         margin: 0;
+        display: block;
       }
       @page {
         margin: 0.5cm;
+        size: A4 landscape;
       }
     }
   </style>
@@ -165,11 +151,15 @@
   <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap;">
     <div style="display: flex; align-items: center;">
       <img src="/logo?v=1" alt="QS printer" style="max-width: 120px; max-height: 40px; height: auto; margin-right: 15px;" onerror="console.error('ロゴの読み込みに失敗しました')">
+      {% if parent_folder_path %}
+      <a href="/folder/{{ parent_folder_path|urlencode }}" style="margin-right: 15px; padding: 6px 16px; background-color: #6c757d; color: white; text-decoration: none; border-radius: 4px; font-size: 14px; font-weight: 500;">一覧に戻る</a>
+      {% else %}
+      <a href="/" style="margin-right: 15px; padding: 6px 16px; background-color: #6c757d; color: white; text-decoration: none; border-radius: 4px; font-size: 14px; font-weight: 500;">一覧に戻る</a>
+      {% endif %}
       <span>ユーザー: {{ username }}</span> |
       <span>ファイル: {{ filename }}</span>
     </div>
     <div>
-      <button id="toggleIntegrateMode" onclick="toggleIntegrateMode()" class="secondary" style="margin-right: 10px;">統合モード</button>
       生徒名:
       <select id="student_name" onchange="updatePreview()" style="width:150px; padding: 4px 8px; border: 1px solid #ccc; border-radius: 4px; margin-right: 10px;">
         <option value="">選択してください</option>
@@ -181,32 +171,12 @@
       </select>
       <button onclick="printNow()">印刷</button>
     </div>
-    <div id="integrateControls" class="integrate-mode-controls">
-      <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap;">
-        <div>
-          <span class="selected-count" id="selectedCount">選択: 0ページ</span>
-        </div>
-        <div>
-          <button onclick="clearAllSelections()" class="secondary" style="margin-right: 10px;">このファイルの選択を解除</button>
-          <button onclick="clearAllFilesSelections()" class="secondary" style="margin-right: 10px;">すべてのファイルの選択を解除</button>
-          <button onclick="showIntegratedPreview()" class="success">統合して表示</button>
-        </div>
-      </div>
-    </div>
   </div>
 </div>
 
 <div id="pages">
   {% for url in image_urls %}
     <div class="page-wrapper" id="page-wrapper-{{ loop.index }}">
-      <div class="page-controls" style="display: none;">
-        <input type="checkbox" id="page_{{ loop.index }}_check" data-page="{{ loop.index }}" onchange="updateSelection()">
-        <select id="page_{{ loop.index }}_type" data-page="{{ loop.index }}" onchange="updateSelection()">
-          <option value="cover" {% if loop.index == 1 %}selected{% endif %}>表紙</option>
-          <option value="question" {% if loop.index != 1 %}selected{% endif %}>問題</option>
-          <option value="answer">解答</option>
-        </select>
-      </div>
       <div class="page" id="page-{{ loop.index }}">
         <img src="{{ url }}" alt="ページ {{ loop.index }}" id="page-img-{{ loop.index }}">
       </div>
@@ -275,26 +245,6 @@ function printNow() {
     console.error("log_print error:", e);
   });
   
-  // 統合PDFの場合は印刷後に削除
-  {% if is_integrated %}
-  setTimeout(() => {
-    fetch("/api/delete-integrated-pdf", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        filename: "{{ filename }}"
-      })
-    }).then(response => {
-      if (response.ok) {
-        console.log("統合PDFを削除しました");
-      }
-    }).catch(e => {
-      console.error("削除エラー:", e);
-    });
-  }, 5000);  // 5秒後に削除（印刷が完了するのを待つ）
-  {% endif %}
 }
 
 // ページ読み込み時に画像の読み込み完了を待つ
@@ -313,212 +263,8 @@ window.addEventListener('load', function() {
     });
   });
   
-  // 統合モードの状態を復元（統合PDFの場合は統合モードを無効化）
-  {% if not is_integrated %}
-  loadIntegrateModeState();
-  {% endif %}
 });
 
-// 統合モードの状態管理
-let integrateModeActive = false;
-const STORAGE_KEY = 'integrateMode';
-const SELECTION_STORAGE_KEY = 'selectedPages';
-
-function toggleIntegrateMode() {
-  integrateModeActive = !integrateModeActive;
-  const controls = document.getElementById('integrateControls');
-  const pageControls = document.querySelectorAll('.page-controls');
-  
-  if (integrateModeActive) {
-    controls.classList.add('active');
-    pageControls.forEach(ctrl => {
-      // 分割済みの場合は表示、元のコントロールも表示（分割ボタンがある）
-      const wrapper = ctrl.closest('.page-wrapper');
-      const pageDiv = wrapper ? wrapper.querySelector('.page:not(.page-split-container)') : null;
-      if (!pageDiv || !pageDiv.classList.contains('page-split-container')) {
-        ctrl.style.display = 'flex';
-      }
-    });
-    document.getElementById('toggleIntegrateMode').textContent = '通常モード';
-    loadSelections();
-  } else {
-    controls.classList.remove('active');
-    pageControls.forEach(ctrl => ctrl.style.display = 'none');
-    document.getElementById('toggleIntegrateMode').textContent = '統合モード';
-  }
-  sessionStorage.setItem(STORAGE_KEY, integrateModeActive ? 'true' : 'false');
-}
-
-function loadIntegrateModeState() {
-  const saved = sessionStorage.getItem(STORAGE_KEY);
-  if (saved === 'true') {
-    integrateModeActive = false; // toggleIntegrateModeでtrueになるので、falseから始める
-    toggleIntegrateMode();
-  }
-}
-
-
-function updateSelection() {
-  const filename = '{{ filename }}';
-  const selections = [];
-  const checkboxes = document.querySelectorAll('input[type="checkbox"][data-page]');
-  
-  checkboxes.forEach(cb => {
-    if (cb.checked) {
-      const pageNum = parseInt(cb.dataset.page);
-      const typeSelect = document.getElementById(`page_${pageNum}_type`);
-      const pageType = typeSelect ? typeSelect.value : 'question';
-      
-      selections.push({
-        page: pageNum,
-        type: pageType
-      });
-    }
-  });
-  
-  // SessionStorageに保存
-  const storageKey = `${SELECTION_STORAGE_KEY}_${filename}`;
-  sessionStorage.setItem(storageKey, JSON.stringify(selections));
-  
-  // 選択数を更新
-  updateSelectedCount();
-}
-
-function loadSelections() {
-  const filename = '{{ filename }}';
-  const storageKey = `${SELECTION_STORAGE_KEY}_${filename}`;
-  const saved = sessionStorage.getItem(storageKey);
-  
-  if (saved) {
-    try {
-      const selections = JSON.parse(saved);
-      selections.forEach(sel => {
-        const checkbox = document.getElementById(`page_${sel.page}_check`);
-        const typeSelect = document.getElementById(`page_${sel.page}_type`);
-        if (checkbox && typeSelect) {
-          checkbox.checked = true;
-          typeSelect.value = sel.type;
-        }
-      });
-      updateSelectedCount();
-    } catch (e) {
-      console.error('選択状態の読み込みエラー:', e);
-    }
-  }
-}
-
-function updateSelectedCount() {
-  // 現在のファイルの選択数を表示
-  const checked = document.querySelectorAll('input[type="checkbox"][data-page]:checked').length;
-  
-  // すべてのファイルから選択された総数を計算
-  const allSelectedPages = getAllSelectedPages();
-  let totalSelected = 0;
-  for (const selections of Object.values(allSelectedPages)) {
-    totalSelected += selections.length;
-  }
-  
-  if (totalSelected > checked) {
-    document.getElementById('selectedCount').textContent = `選択: ${checked}ページ (合計: ${totalSelected}ページ)`;
-  } else {
-    document.getElementById('selectedCount').textContent = `選択: ${checked}ページ`;
-  }
-}
-
-function clearAllSelections() {
-  // 現在のファイルの選択を解除
-  const checkboxes = document.querySelectorAll('input[type="checkbox"][data-page]');
-  checkboxes.forEach(cb => cb.checked = false);
-  updateSelection();
-}
-
-function clearAllFilesSelections() {
-  // すべてのファイルの選択を解除
-  if (confirm('すべてのファイルから選択を解除しますか？')) {
-    // 現在のファイルの選択を解除
-    clearAllSelections();
-    
-    // 他のファイルの選択状態もSessionStorageから削除
-    const keysToRemove = [];
-    for (let i = 0; i < sessionStorage.length; i++) {
-      const key = sessionStorage.key(i);
-      if (key && key.startsWith('selectedPages_') && key !== `selectedPages_{{ filename }}`) {
-        keysToRemove.push(key);
-      }
-    }
-    keysToRemove.forEach(key => sessionStorage.removeItem(key));
-    
-    updateSelectedCount();
-  }
-}
-
-function getAllSelectedPages() {
-  // SessionStorageからすべてのファイルの選択状態を取得
-  const allSelections = {};
-  for (let i = 0; i < sessionStorage.length; i++) {
-    const key = sessionStorage.key(i);
-    if (key && key.startsWith('selectedPages_')) {
-      const filename = key.replace('selectedPages_', '');
-      try {
-        const selections = JSON.parse(sessionStorage.getItem(key));
-        if (selections && selections.length > 0) {
-          allSelections[filename] = selections;
-        }
-      } catch (e) {
-        console.error('選択状態の読み込みエラー:', e);
-      }
-    }
-  }
-  return allSelections;
-}
-
-function showIntegratedPreview() {
-  // すべてのファイルから選択されたページを収集
-  const allSelectedPages = getAllSelectedPages();
-  
-  console.log('DEBUG: showIntegratedPreview - allSelectedPages:', allSelectedPages);
-  
-  if (Object.keys(allSelectedPages).length === 0) {
-    alert('統合するページを選択してください');
-    return;
-  }
-  
-  // API用の形式に変換
-  const fileSelections = [];
-  for (const [filename, selections] of Object.entries(allSelectedPages)) {
-    console.log(`DEBUG: showIntegratedPreview - filename: ${filename}, selections:`, selections);
-    fileSelections.push({
-      filename: filename,
-      selections: selections
-    });
-  }
-  
-  console.log('DEBUG: showIntegratedPreview - fileSelections:', fileSelections);
-  
-  // APIを呼び出して統合PDFを生成
-  fetch('/api/integrate-pdf', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      file_selections: fileSelections
-    })
-  })
-  .then(response => response.json())
-  .then(data => {
-    if (data.success) {
-      // 統合PDFのプレビューページに遷移
-      window.location.href = `/view-integrated/${encodeURIComponent(data.integrated_filename)}`;
-    } else {
-      alert('統合エラー: ' + (data.error || '不明なエラー'));
-    }
-  })
-  .catch(error => {
-    console.error('Error:', error);
-    alert('統合に失敗しました');
-  });
-}
 </script>
 
 </body>
