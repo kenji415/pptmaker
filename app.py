@@ -106,8 +106,8 @@ def pdf_to_images(filename, username=None, student_name=None, student_number=Non
     os.makedirs(out_dir, exist_ok=True)
 
     # キャッシュキーを生成（ユーザー名、生徒名、生徒番号、テキスト名を含む）
-    # バージョン6: QRコード重複修正、生徒名表示削除
-    cache_key = f"v6_{username or ''}_{student_name or ''}_{student_number or ''}_{text_name or ''}"
+    # バージョン8: QRコードにFILE=ファイル名をURLエンコードして追加
+    cache_key = f"v8_{username or ''}_{student_name or ''}_{student_number or ''}_{text_name or ''}"
     cache_suffix = ""
     if cache_key.strip():
         # ハッシュ値を生成してキャッシュサフィックスとして使用
@@ -202,14 +202,18 @@ def pdf_to_images(filename, username=None, student_name=None, student_number=Non
                         # PRINT_IDを生成（一意なID）
                         print_id = generate_print_id()
                         
-                        # 元のファイル名を取得（パス区切り文字を考慮）
-                        original_filename = unquote(filename) if '%' in filename else filename
+                        # 元のファイル名を取得（filenameは既にunquote済み）
+                        # 相対パスをそのまま使用（例: "算数/6年/数の性質_連続する数の積_応用.pdf"）
+                        # パス区切り文字を統一（Windows形式をスラッシュに）
+                        original_filename = filename.replace('\\', '/')
                         
                         # PRINT_IDとファイル名のマッピングを保存
                         save_print_id_mapping(print_id, original_filename)
                         
-                        # QRコードのデータ: PRINT_ID=QS_YYYY_NNNNN,FILE=元のファイル名
-                        qr_data = f"PRINT_ID={print_id},FILE={original_filename}"
+                        # QRコードのデータ: PRINT_ID=QS_YYYY_NNNNN,FILE=元のファイル名（URLエンコード）
+                        # 日本語ファイル名を正しく扱うため、URLエンコードしてから埋め込む
+                        encoded_filename = quote(original_filename, safe='/')
+                        qr_data = f"PRINT_ID={print_id},FILE={encoded_filename}"
                         
                         # QRコードを生成
                         qr = qrcode.QRCode(

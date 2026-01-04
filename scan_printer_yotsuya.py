@@ -11,6 +11,7 @@ import logging
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
+from urllib.parse import unquote
 
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
@@ -33,6 +34,8 @@ except ImportError:
 try:
     import win32print
     import win32api
+    import win32ui
+    import win32con
     HAS_WIN32PRINT = True
 except ImportError:
     HAS_WIN32PRINT = False
@@ -136,52 +139,114 @@ def load_print_id_mapping() -> dict:
     return mapping
 
 
-def get_print_pdf_path(print_id: str, original_filename: Optional[str] = None) -> Optional[Path]:
-    """PRINT_IDに対応するPDFファイルのパスを取得"""
+def guess_filename_from_scan_name(scan_filename: str) -> Optional[str]:
+    """スキャンされたファイル名から元のファイル名を推測"""
+    # 例: "算数_6年_数の性質_連続する数の積_応用.pdf - QS printer.pdf"
+    # → "算数/6年/数の性質_連続する数の積_応用.pdf"
     
-    # 方法1: マッピングファイルから検索
-    mapping = load_print_id_mapping()
-    if print_id in mapping:
-        mapped_filename = mapping[print_id]
-        pdf_path = PDF_DIR / mapped_filename
+    # "- QS printer.pdf" を除去
+    base_name = scan_filename.replace(" - QS printer.pdf", "").replace(".pdf", "")
+    
+    # アンダースコアをスラッシュに変換して推測
+    # "算数_6年_数の性質_連続する数の積_応用" → "算数/6年/数の性質_連続する数の積_応用.pdf"
+    guessed = base_name.replace("_", "/") + ".pdf"
+    
+    return guessed
+
+
+def get_print_pdf_path(original_filename: Optional[str] = None, scan_filename: Optional[str] = None) -> Optional[Path]:
+    """ファイル名でPDFファイルのパスを取得"""
+    
+    # 方法1: QRコードから取得したファイル名で直接検索（最優先）
+    if original_filename:
+        # ファイル名をそのまま使って検索（パス区切りを考慮）
+        pdf_path = PDF_DIR / original_filename
         if pdf_path.exists():
-            logging.info(f"印刷対象PDFを発見（マッピング）: {pdf_path}")
+            logging.info(f"印刷対象PDFを発見（QRコードのFILE）: {pdf_path}")
             return pdf_path
         else:
-            logging.warning(f"マッピングに記載されているファイルが見つかりません: {mapped_filename}")
+            logging.warning(f"QRコードのFILEに記載されているファイルが見つかりません: {original_filename}")
+            # 相対パスでの検索も試行
+            if "/" in original_filename or "\\" in original_filename:
+                # パス区切りがある場合は、最後のファイル名部分で検索
+                filename_part = Path(original_filename).name
+                for pdf_file in PDF_DIR.rglob(f"*{filename_part}"):
+                    if pdf_file.is_file():
+                        logging.info(f"印刷対象PDFを発見（ファイル名部分一致）: {pdf_file}")
+                        return pdf_file
     
-    # 方法2: 元のファイル名が提供されている場合、そのファイルを検索
-    if original_filename:
-        # ファイル名から拡張子を除いた部分で検索
-        base_name = Path(original_filename).stem
-        for pdf_file in PDF_DIR.rglob(f"*{base_name}*.pdf"):
-            if pdf_file.is_file():
-                logging.info(f"印刷対象PDFを発見（元ファイル名）: {pdf_file}")
-                return pdf_file
+    # 方法2: スキャンされたファイル名から推測（FILE=がない場合のフォールバック）
+    if scan_filename:
+        guessed_filename = guess_filename_from_scan_name(scan_filename)
+        if guessed_filename:
+            guessed_path = PDF_DIR / guessed_filename
+            if guessed_path.exists():
+                logging.info(f"印刷対象PDFを発見（ファイル名推測）: {guessed_path}")
+                return guessed_path
+            else:
+                # 部分一致で検索
+                base_parts = guessed_filename.split("/")
+                if len(base_parts) >= 2:
+                    # 最後の2つの部分（例: "6年/数の性質_連続する数の積_応用.pdf"）で検索
+                    search_pattern = "/".join(base_parts[-2:])
+                    for pdf_file in PDF_DIR.rglob(f"*{search_pattern}"):
+                        if pdf_file.is_file():
+                            logging.info(f"印刷対象PDFを発見（部分一致検索）: {pdf_file}")
+                            return pdf_file
     
-    # 方法3: {PRINT_ID}.pdf という名前のファイルを検索
-    if PDF_DIR.exists():
-        for pdf_file in PDF_DIR.rglob(f"{print_id}.pdf"):
-            if pdf_file.is_file():
-                logging.info(f"印刷対象PDFを発見（PRINT_ID名）: {pdf_file}")
-                return pdf_file
-    
-    # 方法4: 中央リポジトリから検索
-    if PRINT_MATERIALS_ROOT and PRINT_MATERIALS_ROOT.exists():
-        pdf_path = PRINT_MATERIALS_ROOT / f"{print_id}.pdf"
+    # 方法3: 中央リポジトリから検索（オプション）
+    if PRINT_MATERIALS_ROOT and PRINT_MATERIALS_ROOT.exists() and original_filename:
+        pdf_path = PRINT_MATERIALS_ROOT / original_filename
         if pdf_path.exists():
             logging.info(f"印刷対象PDFを発見（中央リポジトリ）: {pdf_path}")
             return pdf_path
     
-    # 方法5: test_pdfsフォルダ内のすべてのPDFをリストアップしてログに出力
+    # 方法4: test_pdfsフォルダ内のすべてのPDFをリストアップしてログに出力
     if PDF_DIR.exists():
         all_pdfs = list(PDF_DIR.rglob("*.pdf"))
-        logging.warning(f"印刷対象PDFが見つかりません: {print_id}.pdf")
+        logging.warning(f"印刷対象PDFが見つかりません: {original_filename or scan_filename}")
         logging.info(f"test_pdfsフォルダ内のPDFファイル数: {len(all_pdfs)}")
         if len(all_pdfs) <= 10:
             logging.info(f"利用可能なPDFファイル: {[str(p.relative_to(PDF_DIR)) for p in all_pdfs]}")
     
     return None
+
+
+def save_print_id_mapping(print_id: str, filename: str):
+    """PRINT_IDとファイル名のマッピングを保存"""
+    file_exists = PRINT_ID_MAPPING_FILE.exists()
+    
+    # 既存のマッピングを読み込む
+    existing_mappings = {}
+    if file_exists:
+        try:
+            with open(PRINT_ID_MAPPING_FILE, "r", encoding="utf-8") as f:
+                reader = csv.DictReader(f)
+                for row in reader:
+                    existing_mappings[row["print_id"]] = row["filename"]
+        except Exception as e:
+            logging.warning(f"マッピングファイル読み込みエラー: {e}")
+    
+    # 既に存在する場合はスキップ
+    if print_id in existing_mappings:
+        return
+    
+    # 新しいマッピングを追加
+    existing_mappings[print_id] = filename
+    
+    # 保存
+    try:
+        with open(PRINT_ID_MAPPING_FILE, "w", encoding="utf-8", newline="") as f:
+            writer = csv.DictWriter(f, fieldnames=["print_id", "filename"])
+            writer.writeheader()
+            for pid, fname in existing_mappings.items():
+                writer.writerow({
+                    "print_id": pid,
+                    "filename": fname
+                })
+        logging.info(f"マッピングを保存しました: {print_id} -> {filename}")
+    except Exception as e:
+        logging.warning(f"マッピングファイル保存エラー: {e}")
 
 
 def extract_print_id_from_qr(pdf_path: Path) -> tuple[Optional[str], Optional[str]]:
@@ -218,33 +283,43 @@ def extract_print_id_from_qr(pdf_path: Path) -> tuple[Optional[str], Optional[st
             
             # QRコードデータを取得
             qr_data = qr_codes[0].data.decode('utf-8')
-            logging.info(f"QRコード検出: {qr_data}")
+            logging.info(f"QRコード検出（全内容）: {qr_data}")
             
             # PRINT_ID=QS_...,FILE=ファイル名 の形式から情報を抽出
             import re
             print_id = None
             original_filename = None
             
-            # PRINT_IDを抽出
-            match = re.search(r'PRINT_ID=([^,]+)', qr_data)
+            # PRINT_IDを抽出（カンマまたは空白で区切られる）
+            match = re.search(r'PRINT_ID=([^,\s]+)', qr_data)
             if match:
-                print_id = match.group(1)
-            
-            # FILEを抽出
-            match = re.search(r'FILE=([^,]+)', qr_data)
-            if match:
-                original_filename = match.group(1)
-            
-            # 旧形式（PRINT_ID=のみ）にも対応
-            if not print_id:
+                print_id = match.group(1).strip()
+                logging.info(f"PRINT_ID抽出: {print_id}")
+            else:
+                # 旧形式（PRINT_ID=のみ）にも対応
                 match = re.match(r'PRINT_ID=(\S+)', qr_data)
                 if match:
-                    print_id = match.group(1)
+                    print_id = match.group(1).strip()
+                    logging.info(f"PRINT_ID抽出（旧形式）: {print_id}")
+            
+            # FILEを抽出（カンマで区切られる、または末尾まで）
+            # FILE=以降を取得（URLエンコードされている可能性があるため、全体を取得）
+            match = re.search(r'FILE=(.+)', qr_data)
+            if match:
+                encoded_filename = match.group(1).strip()
+                # URLデコードして元のファイル名に戻す
+                original_filename = unquote(encoded_filename)
+                logging.info(f"FILE抽出（エンコード前）: {encoded_filename}")
+                logging.info(f"FILE抽出（デコード後）: {original_filename}")
+            else:
+                logging.warning(f"QRコードにFILE=が含まれていません: {qr_data}")
+                original_filename = None
             
             if print_id:
                 return print_id, original_filename
             else:
                 # PRINT_IDがなければエラー
+                logging.warning(f"PRINT_IDを抽出できませんでした: {qr_data}")
                 return None, None
         
         logging.warning(f"QRコードが検出されませんでした: {pdf_path}")
@@ -291,7 +366,96 @@ def print_pdf(pdf_path: Path, printer_name: str, copies: int = 1) -> bool:
             
             logging.info(f"印刷を試行中: {abs_path} -> {printer_name}")
             
-            # 方法1: printtoコマンドを使用
+            # 方法1: Adobe Readerのコマンドラインオプションを使用（横向き指定）
+            # Adobe Readerのパスを検索
+            acrobat_paths = [
+                r"C:\Program Files\Adobe\Acrobat DC\Acrobat\Acrobat.exe",
+                r"C:\Program Files (x86)\Adobe\Acrobat Reader DC\Reader\AcroRd32.exe",
+                r"C:\Program Files\Adobe\Acrobat Reader DC\Reader\AcroRd32.exe",
+                r"C:\Program Files (x86)\Adobe\Acrobat Reader DC\Reader\AcroRd32.exe",
+            ]
+            
+            acrobat_path = None
+            for path in acrobat_paths:
+                if Path(path).exists():
+                    acrobat_path = path
+                    break
+            
+            # Adobe Readerが見つかった場合は、コマンドラインで横向き印刷を試行
+            if acrobat_path:
+                try:
+                    # Adobe Readerのコマンドライン: /t で印刷（ダイアログなし）、プリンター名を指定
+                    # ただし、Adobe Readerのコマンドラインでは直接横向きを指定できないため、
+                    # プリンター設定を事前に変更する必要がある
+                    logging.info(f"Adobe Readerを使用して印刷: {acrobat_path}")
+                    
+                    # まずプリンターを横向きに設定
+                    printer_handle = win32print.OpenPrinter(printer_name)
+                    try:
+                        printer_info = win32print.GetPrinter(printer_handle, 2)
+                        if printer_info and 'pDevMode' in printer_info and printer_info['pDevMode']:
+                            devmode = printer_info['pDevMode']
+                            devmode.Orientation = 2  # Landscape
+                            devmode.Fields = devmode.Fields | win32con.DM_ORIENTATION
+                            win32print.SetPrinter(printer_handle, 2, printer_info, 0)
+                            logging.info(f"プリンター '{printer_name}' を横向きに設定しました")
+                    finally:
+                        win32print.ClosePrinter(printer_handle)
+                    
+                    # Adobe Readerで印刷（/t オプションでダイアログなし）
+                    result = win32api.ShellExecute(
+                        0,
+                        "open",
+                        acrobat_path,
+                        f'/t "{abs_path}" "{printer_name}"',
+                        str(Path(abs_path).parent),
+                        0
+                    )
+                    
+                    if result > 32:
+                        logging.info(f"印刷ジョブを投入しました（Adobe Reader経由）: {pdf_path.name} -> {printer_name}")
+                        if temp_pdf_path:
+                            import threading
+                            def delete_temp_file():
+                                time.sleep(10)
+                                try:
+                                    if temp_pdf_path.exists():
+                                        temp_pdf_path.unlink()
+                                        logging.info(f"一時ファイルを削除: {temp_pdf_path}")
+                                except Exception as e:
+                                    logging.warning(f"一時ファイル削除エラー: {e}")
+                            threading.Thread(target=delete_temp_file, daemon=True).start()
+                        return True
+                    else:
+                        raise Exception(f"Adobe Reader ShellExecute returned {result}")
+                except Exception as acrobat_error:
+                    logging.warning(f"Adobe Readerでの印刷に失敗: {acrobat_error}")
+                    logging.info("通常の方法にフォールバックします...")
+            
+            # 方法2: printtoコマンドを使用（プリンター設定を事前に変更）
+            # プリンターを横向き（landscape）に設定
+            original_orientation = None
+            printer_handle = None
+            try:
+                printer_handle = win32print.OpenPrinter(printer_name)
+                if printer_handle:
+                    printer_info = win32print.GetPrinter(printer_handle, 2)
+                    if printer_info and 'pDevMode' in printer_info and printer_info['pDevMode']:
+                        devmode = printer_info['pDevMode']
+                        original_orientation = devmode.Orientation
+                        devmode.Orientation = 2  # Landscape
+                        devmode.Fields = devmode.Fields | win32con.DM_ORIENTATION
+                        win32print.SetPrinter(printer_handle, 2, printer_info, 0)
+                        logging.info(f"プリンター '{printer_name}' を横向きに設定しました（元の設定: {original_orientation}）")
+            except Exception as devmode_error:
+                logging.warning(f"プリンター設定の変更に失敗（続行します）: {devmode_error}")
+            finally:
+                if printer_handle:
+                    try:
+                        win32print.ClosePrinter(printer_handle)
+                    except:
+                        pass
+            
             try:
                 result = win32api.ShellExecute(
                     0,
@@ -379,6 +543,26 @@ def print_pdf(pdf_path: Path, printer_name: str, copies: int = 1) -> bool:
                     return False
                     
         finally:
+            # プリンター設定を元に戻す
+            if original_orientation is not None and printer_name:
+                try:
+                    restore_handle = win32print.OpenPrinter(printer_name)
+                    if restore_handle:
+                        printer_info = win32print.GetPrinter(restore_handle, 2)
+                        if printer_info and 'pDevMode' in printer_info and printer_info['pDevMode']:
+                            devmode = printer_info['pDevMode']
+                            devmode.Orientation = original_orientation
+                            devmode.Fields = devmode.Fields | win32con.DM_ORIENTATION
+                            win32print.SetPrinter(
+                                restore_handle,
+                                2,
+                                printer_info,
+                                0
+                            )
+                            logging.info(f"プリンター設定を元に戻しました（向き: {original_orientation}）")
+                        win32print.ClosePrinter(restore_handle)
+                except Exception as restore_error:
+                    logging.warning(f"プリンター設定の復元に失敗: {restore_error}")
             # エラー時も一時ファイルをクリーンアップ（ただし印刷キューに送信済みの場合は少し待つ）
             pass  # 削除は別スレッドで行う
         
@@ -441,11 +625,11 @@ def handle_pdf(pdf_path: Path) -> None:
             logging.warning(f"ファイルが安定しませんでした: {pdf_path}")
             return
         
-        # QRコードからPRINT_IDと元のファイル名を抽出
+        # QRコードからファイル名（FILE=）を抽出（PRINT_IDはログ用にのみ使用）
         print_id, original_filename = extract_print_id_from_qr(pdf_path)
         
-        if not print_id:
-            # QRコードが読めない場合、errorフォルダへ
+        if not original_filename:
+            # FILE=が含まれていない場合、errorフォルダへ
             ERROR_DIR.mkdir(parents=True, exist_ok=True)
             error_file = ERROR_DIR / pdf_path.name
             
@@ -460,18 +644,19 @@ def handle_pdf(pdf_path: Path) -> None:
                 shutil.move(str(pdf_path), str(error_file))
                 log_print_result(
                     scan_file=pdf_path.name,
-                    print_id=None,
+                    print_id=print_id or "unknown",
                     printer=PRINTER_NAME,
                     result="error",
-                    error_message="QR not found"
+                    error_message="FILE not found in QR"
                 )
-                logging.warning(f"QRコードが読めませんでした: {pdf_path}")
+                logging.warning(f"QRコードにFILE=が含まれていません: {pdf_path}")
             except Exception as e:
                 logging.error(f"errorフォルダへの移動エラー: {e}")
             return
         
-        # PRINT_IDに対応する印刷対象PDFを取得
-        print_pdf_path = get_print_pdf_path(print_id, original_filename)
+        # ファイル名で印刷対象PDFを取得
+        scan_filename = pdf_path.name
+        print_pdf_path = get_print_pdf_path(original_filename, scan_filename)
         
         if not print_pdf_path:
             # 印刷対象PDFが見つからない場合、errorフォルダへ
@@ -489,12 +674,12 @@ def handle_pdf(pdf_path: Path) -> None:
                 shutil.move(str(pdf_path), str(error_file))
                 log_print_result(
                     scan_file=pdf_path.name,
-                    print_id=print_id,
+                    print_id=print_id or "unknown",
                     printer=PRINTER_NAME,
                     result="error",
-                    error_message=f"PDF not found: {print_id}.pdf"
+                    error_message=f"PDF not found: {original_filename}"
                 )
-                logging.error(f"印刷対象PDFが見つかりません: {print_id}.pdf")
+                logging.error(f"印刷対象PDFが見つかりません: {original_filename}")
             except Exception as e:
                 logging.error(f"errorフォルダへの移動エラー: {e}")
             return
@@ -518,12 +703,12 @@ def handle_pdf(pdf_path: Path) -> None:
                 shutil.move(str(pdf_path), str(processed_file))
                 log_print_result(
                     scan_file=pdf_path.name,
-                    print_id=print_id,
+                    print_id=print_id or "unknown",
                     printer=PRINTER_NAME,
                     result="success",
                     error_message=""
                 )
-                logging.info(f"処理完了: {pdf_path.name} -> {print_id or 'QRなし'}")
+                logging.info(f"処理完了: {pdf_path.name} -> {original_filename} (PRINT_ID: {print_id or 'N/A'})")
             except Exception as e:
                 logging.error(f"processedフォルダへの移動エラー: {e}")
         else:
@@ -542,7 +727,7 @@ def handle_pdf(pdf_path: Path) -> None:
                 shutil.move(str(pdf_path), str(error_file))
                 log_print_result(
                     scan_file=pdf_path.name,
-                    print_id=print_id,
+                    print_id=print_id or "unknown",
                     printer=PRINTER_NAME,
                     result="error",
                     error_message="Print failed"
