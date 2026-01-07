@@ -37,6 +37,15 @@ try:
     import win32ui
     import win32con
     HAS_WIN32PRINT = True
+    # 用紙サイズの定数
+    DMPAPER_A4 = 9  # A4用紙
+    DMORIENT_LANDSCAPE = 2  # 横向き
+    DMORIENT_PORTRAIT = 1  # 縦向き
+    DM_PAPERSIZE = 0x00000002
+    DM_ORIENTATION = 0x00000001
+    DM_COPIES = 0x00000100
+    # ページレイアウト（複数プリンターで共通）
+    DM_DUPLEX = 0x00001000
 except ImportError:
     HAS_WIN32PRINT = False
     logging.warning("win32print not available. Install: pip install pywin32")
@@ -249,11 +258,12 @@ def save_print_id_mapping(print_id: str, filename: str):
         logging.warning(f"マッピングファイル保存エラー: {e}")
 
 
-def extract_print_id_from_qr(pdf_path: Path) -> tuple[Optional[str], Optional[str]]:
-    """PDFの1ページ目からQRコードを読み取り、PRINT_IDを抽出"""
+def extract_print_id_from_qr(pdf_path: Path) -> tuple[Optional[str], Optional[str], Optional[str]]:
+    """PDFの1ページ目からQRコードを読み取り、PRINT_ID、FILE、PRINTERを抽出
+    戻り値: (print_id, original_filename, printer_name)"""
     if not HAS_PDF2IMAGE or not HAS_PYZBAR:
         logging.error("必要なライブラリがインストールされていません")
-        return None
+        return None, None, None
     
     try:
         # PDFの1ページ目を画像に変換
@@ -266,7 +276,7 @@ def extract_print_id_from_qr(pdf_path: Path) -> tuple[Optional[str], Optional[st
         
         if not images:
             logging.warning(f"PDFから画像を取得できませんでした: {pdf_path}")
-            return None
+            return None, None, None
         
         # QRコードを検出
         for image in images:
@@ -279,16 +289,17 @@ def extract_print_id_from_qr(pdf_path: Path) -> tuple[Optional[str], Optional[st
             # QRコードが複数ある場合はエラー
             if len(qr_codes) > 1:
                 logging.warning(f"QRコードが複数検出されました: {pdf_path}")
-                return None
+                return None, None, None
             
             # QRコードデータを取得
             qr_data = qr_codes[0].data.decode('utf-8')
             logging.info(f"QRコード検出（全内容）: {qr_data}")
             
-            # PRINT_ID=QS_...,FILE=ファイル名 の形式から情報を抽出
+            # PRINT_ID=QS_...,FILE=ファイル名,PRINTER=プリンター名 の形式から情報を抽出
             import re
             print_id = None
             original_filename = None
+            printer_name = None
             
             # PRINT_IDを抽出（カンマまたは空白で区切られる）
             match = re.search(r'PRINT_ID=([^,\s]+)', qr_data)
@@ -303,8 +314,8 @@ def extract_print_id_from_qr(pdf_path: Path) -> tuple[Optional[str], Optional[st
                     logging.info(f"PRINT_ID抽出（旧形式）: {print_id}")
             
             # FILEを抽出（カンマで区切られる、または末尾まで）
-            # FILE=以降を取得（URLエンコードされている可能性があるため、全体を取得）
-            match = re.search(r'FILE=(.+)', qr_data)
+            # FILE=から次のカンマ、または文字列の終わりまでの部分を取得
+            match = re.search(r'FILE=([^,]+)', qr_data)
             if match:
                 encoded_filename = match.group(1).strip()
                 # URLデコードして元のファイル名に戻す
@@ -315,19 +326,25 @@ def extract_print_id_from_qr(pdf_path: Path) -> tuple[Optional[str], Optional[st
                 logging.warning(f"QRコードにFILE=が含まれていません: {qr_data}")
                 original_filename = None
             
+            # PRINTERを抽出（カンマで区切られる）
+            match = re.search(r'PRINTER=([^,\s]+)', qr_data)
+            if match:
+                printer_name = match.group(1).strip()
+                logging.info(f"PRINTER抽出: {printer_name}")
+            
             if print_id:
-                return print_id, original_filename
+                return print_id, original_filename, printer_name
             else:
                 # PRINT_IDがなければエラー
                 logging.warning(f"PRINT_IDを抽出できませんでした: {qr_data}")
-                return None, None
+                return None, None, None
         
         logging.warning(f"QRコードが検出されませんでした: {pdf_path}")
-        return None, None
+        return None, None, None
         
     except Exception as e:
         logging.exception(f"QRコード読み取りエラー: {pdf_path}, {e}")
-        return None, None
+        return None, None, None
 
 
 def print_pdf(pdf_path: Path, printer_name: str, copies: int = 1) -> bool:
@@ -381,33 +398,49 @@ def print_pdf(pdf_path: Path, printer_name: str, copies: int = 1) -> bool:
                     acrobat_path = path
                     break
             
-            # Adobe Readerが見つかった場合は、コマンドラインで横向き印刷を試行
+            # Adobe Readerが見つかった場合は、コマンドラインで印刷を試行
+            # リコーApeos C7070の場合、プリンター設定を事前に変更する必要がある
             if acrobat_path:
                 try:
-                    # Adobe Readerのコマンドライン: /t で印刷（ダイアログなし）、プリンター名を指定
-                    # ただし、Adobe Readerのコマンドラインでは直接横向きを指定できないため、
-                    # プリンター設定を事前に変更する必要がある
                     logging.info(f"Adobe Readerを使用して印刷: {acrobat_path}")
                     
-                    # まずプリンターを横向きに設定
-                    printer_handle = win32print.OpenPrinter(printer_name)
+                    # 注意: SetPrinterはアクセス権限が必要なため、設定変更をスキップ
+                    # プリンターのデフォルト設定を使用して印刷
+                    # 設定を確認するだけ（変更はしない）
                     try:
-                        printer_info = win32print.GetPrinter(printer_handle, 2)
-                        if printer_info and 'pDevMode' in printer_info and printer_info['pDevMode']:
-                            devmode = printer_info['pDevMode']
-                            devmode.Orientation = 2  # Landscape
-                            devmode.Fields = devmode.Fields | win32con.DM_ORIENTATION
-                            win32print.SetPrinter(printer_handle, 2, printer_info, 0)
-                            logging.info(f"プリンター '{printer_name}' を横向きに設定しました")
-                    finally:
-                        win32print.ClosePrinter(printer_handle)
+                        printer_handle = win32print.OpenPrinter(printer_name)
+                        try:
+                            printer_info = win32print.GetPrinter(printer_handle, 2)
+                            if printer_info and 'pDevMode' in printer_info and printer_info['pDevMode']:
+                                devmode = printer_info['pDevMode']
+                                logging.info(f"プリンター設定（現在）: PaperSize={devmode.PaperSize}, Orientation={devmode.Orientation}, Copies={devmode.Copies}")
+                                
+                                # リコーApeos C7070固有の設定を確認（Nup設定の確認のみ、変更はしない）
+                                devmode_attrs = dir(devmode)
+                                for attr_name in ['PagesPerSheet', 'PagesPerSheetN', 'Nup', 'NupOrientOrder', 'PagesPerSheetNup']:
+                                    if attr_name in devmode_attrs:
+                                        try:
+                                            current_value = getattr(devmode, attr_name)
+                                            logging.info(f"リコーApeos C7070: {attr_name} = {current_value} (現在の設定)")
+                                            if current_value != 1:
+                                                logging.warning(f"リコーApeos C7070: {attr_name} が {current_value} になっています。手動で1に設定してください。")
+                                        except Exception:
+                                            pass
+                        finally:
+                            win32print.ClosePrinter(printer_handle)
+                    except Exception as e:
+                        logging.info(f"プリンター設定の確認をスキップしました: {e}")
                     
-                    # Adobe Readerで印刷（/t オプションでダイアログなし）
+                    # 設定変更なしで印刷（プリンターのデフォルト設定を使用）
+                    
+                    # Adobe Readerで印刷（/h オプションで非表示、/t でダイアログなし）
+                    # 注意: /t オプションでは、Adobe Readerの保存された設定が使用される可能性がある
+                    # そのため、Adobe Reader側で「1ページ/枚」に設定する必要がある
                     result = win32api.ShellExecute(
                         0,
                         "open",
                         acrobat_path,
-                        f'/t "{abs_path}" "{printer_name}"',
+                        f'/h /t "{abs_path}" "{printer_name}"',
                         str(Path(abs_path).parent),
                         0
                     )
@@ -433,28 +466,16 @@ def print_pdf(pdf_path: Path, printer_name: str, copies: int = 1) -> bool:
                     logging.info("通常の方法にフォールバックします...")
             
             # 方法2: printtoコマンドを使用（プリンター設定を事前に変更）
-            # プリンターを横向き（landscape）に設定
+            # プリンターをA4・横向き・部数1に設定
+            # 注意: プリンター設定の変更は、印刷ジョブを送信する直前に実行する必要がある
             original_orientation = None
+            original_paper_size = None
+            original_copies = None
             printer_handle = None
-            try:
-                printer_handle = win32print.OpenPrinter(printer_name)
-                if printer_handle:
-                    printer_info = win32print.GetPrinter(printer_handle, 2)
-                    if printer_info and 'pDevMode' in printer_info and printer_info['pDevMode']:
-                        devmode = printer_info['pDevMode']
-                        original_orientation = devmode.Orientation
-                        devmode.Orientation = 2  # Landscape
-                        devmode.Fields = devmode.Fields | win32con.DM_ORIENTATION
-                        win32print.SetPrinter(printer_handle, 2, printer_info, 0)
-                        logging.info(f"プリンター '{printer_name}' を横向きに設定しました（元の設定: {original_orientation}）")
-            except Exception as devmode_error:
-                logging.warning(f"プリンター設定の変更に失敗（続行します）: {devmode_error}")
-            finally:
-                if printer_handle:
-                    try:
-                        win32print.ClosePrinter(printer_handle)
-                    except:
-                        pass
+            
+            # 注意: SetPrinterはアクセス権限が必要なため、設定変更をスキップ
+            # プリンターのデフォルト設定を使用する
+            logging.info("プリンター設定の変更をスキップします（デフォルト設定を使用）")
             
             try:
                 result = win32api.ShellExecute(
@@ -543,26 +564,27 @@ def print_pdf(pdf_path: Path, printer_name: str, copies: int = 1) -> bool:
                     return False
                     
         finally:
-            # プリンター設定を元に戻す
-            if original_orientation is not None and printer_name:
-                try:
-                    restore_handle = win32print.OpenPrinter(printer_name)
-                    if restore_handle:
-                        printer_info = win32print.GetPrinter(restore_handle, 2)
-                        if printer_info and 'pDevMode' in printer_info and printer_info['pDevMode']:
-                            devmode = printer_info['pDevMode']
-                            devmode.Orientation = original_orientation
-                            devmode.Fields = devmode.Fields | win32con.DM_ORIENTATION
-                            win32print.SetPrinter(
-                                restore_handle,
-                                2,
-                                printer_info,
-                                0
-                            )
-                            logging.info(f"プリンター設定を元に戻しました（向き: {original_orientation}）")
-                        win32print.ClosePrinter(restore_handle)
-                except Exception as restore_error:
-                    logging.warning(f"プリンター設定の復元に失敗: {restore_error}")
+            # プリンター設定を元に戻す（オプション：必要に応じてコメントアウト）
+            # 元の設定を残したい場合は以下のコードを有効化
+            # if original_orientation is not None and printer_name:
+            #     try:
+            #         restore_handle = win32print.OpenPrinter(printer_name)
+            #         if restore_handle:
+            #             printer_info = win32print.GetPrinter(restore_handle, 2)
+            #             if printer_info and 'pDevMode' in printer_info and printer_info['pDevMode']:
+            #                 devmode = printer_info['pDevMode']
+            #                 devmode.Orientation = original_orientation
+            #                 if original_paper_size is not None:
+            #                     devmode.PaperSize = original_paper_size
+            #                 if original_copies is not None:
+            #                     devmode.Copies = original_copies
+            #                 devmode.Fields = devmode.Fields | DM_ORIENTATION | DM_PAPERSIZE | DM_COPIES
+            #                 win32print.SetPrinter(restore_handle, 2, printer_info, 0)
+            #                 logging.info(f"プリンター設定を元に戻しました")
+            #             win32print.ClosePrinter(restore_handle)
+            #     except Exception as restore_error:
+            #         logging.warning(f"プリンター設定の復元に失敗: {restore_error}")
+            pass
             # エラー時も一時ファイルをクリーンアップ（ただし印刷キューに送信済みの場合は少し待つ）
             pass  # 削除は別スレッドで行う
         
@@ -625,8 +647,16 @@ def handle_pdf(pdf_path: Path) -> None:
             logging.warning(f"ファイルが安定しませんでした: {pdf_path}")
             return
         
-        # QRコードからファイル名（FILE=）を抽出（PRINT_IDはログ用にのみ使用）
-        print_id, original_filename = extract_print_id_from_qr(pdf_path)
+        # QRコードからファイル名（FILE=）とプリンター名（PRINTER=）を抽出（PRINT_IDはログ用にのみ使用）
+        print_id, original_filename, qr_printer_name = extract_print_id_from_qr(pdf_path)
+        
+        # プリンター名の決定: QRコードに含まれていればそれを使用、なければデフォルト値
+        if qr_printer_name:
+            printer_name = qr_printer_name
+            logging.info(f"QRコードからプリンター名を取得: {printer_name}")
+        else:
+            printer_name = PRINTER_NAME  # デフォルトのプリンター名
+            logging.info(f"デフォルトのプリンター名を使用: {printer_name}")
         
         if not original_filename:
             # FILE=が含まれていない場合、errorフォルダへ
@@ -645,7 +675,7 @@ def handle_pdf(pdf_path: Path) -> None:
                 log_print_result(
                     scan_file=pdf_path.name,
                     print_id=print_id or "unknown",
-                    printer=PRINTER_NAME,
+                    printer=printer_name,
                     result="error",
                     error_message="FILE not found in QR"
                 )
@@ -675,7 +705,7 @@ def handle_pdf(pdf_path: Path) -> None:
                 log_print_result(
                     scan_file=pdf_path.name,
                     print_id=print_id or "unknown",
-                    printer=PRINTER_NAME,
+                    printer=printer_name,
                     result="error",
                     error_message=f"PDF not found: {original_filename}"
                 )
@@ -685,7 +715,7 @@ def handle_pdf(pdf_path: Path) -> None:
             return
         
         # 印刷対象PDFを印刷（部数は1部固定）
-        print_success = print_pdf(print_pdf_path, PRINTER_NAME, 1)
+        print_success = print_pdf(print_pdf_path, printer_name, 1)
         
         if print_success:
             # 成功時、processedフォルダへ移動
@@ -704,7 +734,7 @@ def handle_pdf(pdf_path: Path) -> None:
                 log_print_result(
                     scan_file=pdf_path.name,
                     print_id=print_id or "unknown",
-                    printer=PRINTER_NAME,
+                    printer=printer_name,
                     result="success",
                     error_message=""
                 )
@@ -728,7 +758,7 @@ def handle_pdf(pdf_path: Path) -> None:
                 log_print_result(
                     scan_file=pdf_path.name,
                     print_id=print_id or "unknown",
-                    printer=PRINTER_NAME,
+                    printer=printer_name,
                     result="error",
                     error_message="Print failed"
                 )

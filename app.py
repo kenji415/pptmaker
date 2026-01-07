@@ -4,9 +4,11 @@ import re
 import locale
 import hashlib
 import uuid
+import yaml
 from datetime import datetime
 from urllib.parse import quote, unquote
 from functools import wraps
+from pathlib import Path
 
 from flask import Flask, render_template, send_file, request, abort, session, redirect, url_for, flash, jsonify
 from pdf2image import convert_from_path
@@ -34,6 +36,7 @@ STUDENTS_DIR = os.path.join(BASE_DIR, "students")
 TEXT_MAPPING_FILE = os.path.join(BASE_DIR, "text_mapping.csv")
 FILE_NAME_HISTORY_FILE = os.path.join(BASE_DIR, "file_name_history.csv")
 PRINT_ID_MAPPING_FILE = os.path.join(BASE_DIR, "print_id_mapping.csv")
+PRINTERS_CONFIG = os.path.join(BASE_DIR, "printers.yaml")
 
 # 必要なディレクトリを作成
 os.makedirs(STUDENTS_DIR, exist_ok=True)
@@ -82,6 +85,28 @@ def login_required(f):
     return decorated_function
 
 
+def load_printer_config():
+    """プリンタ設定を読み込む"""
+    if not os.path.exists(PRINTERS_CONFIG):
+        return {}
+    
+    try:
+        with open(PRINTERS_CONFIG, "r", encoding="utf-8") as f:
+            config = yaml.safe_load(f)
+            return config or {}
+    except Exception as e:
+        print(f"プリンタ設定ファイルの読み込みエラー: {e}")
+        return {}
+
+
+def get_printer_name_by_campus(campus_name: str) -> str:
+    """校舎名からプリンター名を取得"""
+    config = load_printer_config()
+    if campus_name and campus_name in config:
+        return config[campus_name].get("printer_name", "")
+    return ""
+
+
 def generate_print_id():
     """一意なPRINT_IDを生成（形式: QS_YYYY_NNNNN）"""
     year = datetime.now().strftime("%Y")
@@ -90,7 +115,7 @@ def generate_print_id():
     return f"QS_{year}_{unique_part}"
 
 
-def pdf_to_images(filename, username=None, student_name=None, student_number=None, text_name=None):
+def pdf_to_images(filename, username=None, student_name=None, student_number=None, text_name=None, campus_name=None):
     """PDFを画像に変換"""
     # URLデコード
     filename = unquote(filename)
@@ -105,9 +130,9 @@ def pdf_to_images(filename, username=None, student_name=None, student_number=Non
     out_dir = os.path.join(CACHE_DIR, base)
     os.makedirs(out_dir, exist_ok=True)
 
-    # キャッシュキーを生成（ユーザー名、生徒名、生徒番号、テキスト名を含む）
-    # バージョン8: QRコードにFILE=ファイル名をURLエンコードして追加
-    cache_key = f"v8_{username or ''}_{student_name or ''}_{student_number or ''}_{text_name or ''}"
+    # キャッシュキーを生成（ユーザー名、生徒名、生徒番号、テキスト名、校舎名を含む）
+    # バージョン9: QRコードにPRINTER=プリンター名を追加（校舎選択時）
+    cache_key = f"v9_{username or ''}_{student_name or ''}_{student_number or ''}_{text_name or ''}_{campus_name or ''}"
     cache_suffix = ""
     if cache_key.strip():
         # ハッシュ値を生成してキャッシュサフィックスとして使用
@@ -210,10 +235,16 @@ def pdf_to_images(filename, username=None, student_name=None, student_number=Non
                         # PRINT_IDとファイル名のマッピングを保存
                         save_print_id_mapping(print_id, original_filename)
                         
-                        # QRコードのデータ: PRINT_ID=QS_YYYY_NNNNN,FILE=元のファイル名（URLエンコード）
+                        # QRコードのデータ: PRINT_ID=QS_YYYY_NNNNN,FILE=元のファイル名（URLエンコード）,PRINTER=プリンター名（校舎選択時のみ）
                         # 日本語ファイル名を正しく扱うため、URLエンコードしてから埋め込む
                         encoded_filename = quote(original_filename, safe='/')
                         qr_data = f"PRINT_ID={print_id},FILE={encoded_filename}"
+                        
+                        # 校舎が選択されている場合、プリンター名をQRコードに追加
+                        if campus_name:
+                            printer_name = get_printer_name_by_campus(campus_name)
+                            if printer_name:
+                                qr_data += f",PRINTER={printer_name}"
                         
                         # QRコードを生成
                         qr = qrcode.QRCode(
@@ -800,8 +831,21 @@ def view(filename):
                 selected_student_number = student.get("student_number", "")
                 break
 
+    # クエリパラメータから校舎名を取得（選択された場合）
+    selected_campus_name = request.args.get("campus", "")
+
     # テキスト名を取得（PDFファイル名から拡張子を除く）
     text_name = os.path.splitext(os.path.basename(decoded_filename))[0]
+
+    # プリンタ設定を読み込んで校舎リストを取得
+    printer_config = load_printer_config()
+    campuses = []
+    for campus_key, campus_config in printer_config.items():
+        if campus_key in ["yotsuya", "azabujuban"]:  # 四谷校と麻布十番校のみ
+            campuses.append({
+                "key": campus_key,
+                "name": campus_key.replace("yotsuya", "四谷校").replace("azabujuban", "麻布十番校")
+            })
 
     try:
         image_paths = pdf_to_images(
@@ -809,7 +853,8 @@ def view(filename):
             username=user,
             student_name=selected_student_name if selected_student_name else None,
             student_number=selected_student_number if selected_student_number else None,
-            text_name=text_name  # 生徒名選択に関係なく常に渡す
+            text_name=text_name,  # 生徒名選択に関係なく常に渡す
+            campus_name=selected_campus_name if selected_campus_name else None
         )
     except Exception as e:
         return f"画像変換エラー: {e}", 500
@@ -838,6 +883,8 @@ def view(filename):
         image_urls=image_urls,
         students=students,
         selected_student_name=selected_student_name,
+        selected_campus_name=selected_campus_name,
+        campuses=campuses,
         parent_folder_path=parent_folder_path
     )
 

@@ -2,7 +2,11 @@
 # フォルダ名 = キーとして使用
 
 yotsuya:
-  printer_name: "RICOH_MP_C6004_YOTSUYA"
+  printer_name: "執務室"
+  max_copies: 5
+
+azabujuban:
+  printer_name: "麻布十番"
   max_copies: 5
 
 jiyugaoka:

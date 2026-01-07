@@ -12,7 +12,7 @@ import time
 import logging
 from datetime import datetime
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import Optional, Tuple, Union
 
 import yaml
 from watchdog.observers import Observer
@@ -126,11 +126,12 @@ def wait_until_file_stable(path: Path) -> bool:
     return False
 
 
-def extract_print_id_from_qr(pdf_path: Path) -> Optional[str]:
-    """PDFの1ページ目からQRコードを読み取り、PRINT_IDを抽出"""
+def extract_print_id_from_qr(pdf_path: Path) -> Tuple[Optional[str], Optional[str]]:
+    """PDFの1ページ目からQRコードを読み取り、PRINT_IDとプリンター名を抽出
+    戻り値: (print_id, printer_name)"""
     if not HAS_PDF2IMAGE or not HAS_PYZBAR:
         logging.error("必要なライブラリがインストールされていません")
-        return None
+        return None, None
     
     try:
         # PDFの1ページ目を画像に変換
@@ -143,7 +144,7 @@ def extract_print_id_from_qr(pdf_path: Path) -> Optional[str]:
         
         if not images:
             logging.warning(f"PDFから画像を取得できませんでした: {pdf_path}")
-            return None
+            return None, None
         
         # QRコードを検出
         for image in images:
@@ -156,27 +157,35 @@ def extract_print_id_from_qr(pdf_path: Path) -> Optional[str]:
             # QRコードが複数ある場合はエラー
             if len(qr_codes) > 1:
                 logging.warning(f"QRコードが複数検出されました: {pdf_path}")
-                return None
+                return None, None
             
             # QRコードデータを取得
             qr_data = qr_codes[0].data.decode('utf-8')
             logging.info(f"QRコード検出: {qr_data}")
             
+            print_id = None
+            printer_name = None
+            
             # PRINT_ID=QS_... の形式からPRINT_IDを抽出
-            match = re.match(r'PRINT_ID=(\S+)', qr_data)
+            match = re.search(r'PRINT_ID=([^,\s]+)', qr_data)
             if match:
-                print_id = match.group(1)
-                return print_id
-            else:
-                # PRINT_ID=がない場合はそのまま使用
-                return qr_data.strip()
+                print_id = match.group(1).strip()
+                logging.info(f"PRINT_ID抽出: {print_id}")
+            
+            # PRINTER=プリンター名 の形式からプリンター名を抽出
+            match = re.search(r'PRINTER=([^,\s]+)', qr_data)
+            if match:
+                printer_name = match.group(1).strip()
+                logging.info(f"PRINTER抽出: {printer_name}")
+            
+            return print_id, printer_name
         
         logging.warning(f"QRコードが検出されませんでした: {pdf_path}")
-        return None
+        return None, None
         
     except Exception as e:
         logging.exception(f"QRコード読み取りエラー: {pdf_path}, {e}")
-        return None
+        return None, None
 
 
 def get_print_pdf_path(print_id: str) -> Optional[Path]:
@@ -322,8 +331,21 @@ def handle_pdf(pdf_path: Path) -> None:
             logging.error(f"processingフォルダへの移動エラー: {e}")
             return
         
-        # QRコードからPRINT_IDを抽出
-        print_id = extract_print_id_from_qr(pdf_path)
+        # QRコードからPRINT_IDとプリンター名を抽出
+        print_id, qr_printer_name = extract_print_id_from_qr(pdf_path)
+        
+        # プリンター名の決定: QRコードに含まれていればそれを使用、なければ設定ファイルから取得
+        if qr_printer_name:
+            printer_name = qr_printer_name
+            max_copies = 5  # デフォルト値
+            logging.info(f"QRコードからプリンター名を取得: {printer_name}")
+        elif campus in printer_config:
+            printer_name = printer_config[campus]["printer_name"]
+            max_copies = printer_config[campus].get("max_copies", 5)
+            logging.info(f"設定ファイルからプリンター名を取得: {printer_name}")
+        else:
+            logging.error(f"プリンター名を取得できませんでした（校舎: {campus}、QRコードにも含まれていません）")
+            return
         
         if not print_id:
             # QRコードが読めない場合、errorフォルダへ
