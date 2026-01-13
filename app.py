@@ -23,7 +23,7 @@ app.secret_key = os.environ.get("SECRET_KEY", "your-secret-key-change-this-in-pr
 # 設定: 環境変数で上書き可能、なければローカルパスを使用
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-PDF_DIR = os.path.join(BASE_DIR, "test_pdfs")
+PDF_DIR = os.environ.get("PDF_DIR", r"Y:\算数科作業フォルダ\10分テスト\test_pdf")
 CACHE_DIR = os.path.join(BASE_DIR, "cache")
 LOG_FILE = os.path.join(BASE_DIR, "logs", "print_log.csv")
 POPPLER_PATH = os.environ.get("POPPLER_PATH", None)
