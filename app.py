@@ -131,8 +131,8 @@ def pdf_to_images(filename, username=None, student_name=None, student_number=Non
     os.makedirs(out_dir, exist_ok=True)
 
     # キャッシュキーを生成（ユーザー名、生徒名、生徒番号、テキスト名、校舎名を含む）
-    # バージョン9: QRコードにPRINTER=プリンター名を追加（校舎選択時）
-    cache_key = f"v9_{username or ''}_{student_name or ''}_{student_number or ''}_{text_name or ''}_{campus_name or ''}"
+    # バージョン10: QRコードサイズを20%に拡大
+    cache_key = f"v10_{username or ''}_{student_name or ''}_{student_number or ''}_{text_name or ''}_{campus_name or ''}"
     cache_suffix = ""
     if cache_key.strip():
         # ハッシュ値を生成してキャッシュサフィックスとして使用
@@ -250,7 +250,7 @@ def pdf_to_images(filename, username=None, student_name=None, student_number=Non
                         qr = qrcode.QRCode(
                             version=1,
                             error_correction=qrcode.constants.ERROR_CORRECT_L,
-                            box_size=10,
+                            box_size=15,
                             border=4,
                         )
                         qr.add_data(qr_data)
