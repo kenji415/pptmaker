@@ -199,12 +199,27 @@ def decode_qr_from_image(img_bgr: np.ndarray) -> Optional[str]:
 
 def parse_qr_payload(payload: str) -> Optional[Tuple[str, str, Optional[str]]]:
     """
-    QR形式：生徒名,講師名[,テキスト名]
-    例：山中秀悟,田中
-    例：山中秀悟,田中,数の性質_応用
-    戻り値：(teacher, student, text_name)
+    QR形式をパース：
+    1. 旧形式：生徒名,講師名[,テキスト名]
+       例：山中秀悟,田中
+       例：山中秀悟,田中,数の性質_応用
+    2. PRINT_ID形式：PRINT_ID=...,FILE=...,PRINTER=...
+       この形式の場合はNoneを返す（scan_routerでは処理しない）
+    戻り値：(teacher, student, text_name) または None
     """
+    import re
+    from urllib.parse import unquote
+    
     p = payload.strip()
+    
+    # PRINT_ID形式かどうかをチェック
+    if p.startswith("PRINT_ID="):
+        # PRINT_ID形式のQRコードはscan_routerでは処理しない
+        # （これは印刷用のQRコードで、講師名・生徒名が含まれていない）
+        logging.info(f"PRINT_ID形式のQRコードを検出（scan_routerでは処理しません）: {p[:100]}")
+        return None
+    
+    # 旧形式の処理
     if "," not in p:
         return None
 
@@ -296,6 +311,13 @@ def handle_pdf(pdf_path: Path) -> None:
 
         parsed = parse_qr_payload(qr)
         if not parsed:
+            # PRINT_ID形式のQRコードの場合は、エラーではなくスキップ
+            if qr and qr.startswith("PRINT_ID="):
+                logging.info(f"PRINT_ID形式のQRコードを検出（スキップ）: {pdf_path}")
+                # このファイルはscan_routerでは処理しない（印刷用QRコードのため）
+                # そのままINBOXに残しておく
+                return
+            # それ以外の場合はエラー
             move_to_error(pdf_path, "BADQR")
             logging.error(f"Bad QR payload: '{qr}'")
             return

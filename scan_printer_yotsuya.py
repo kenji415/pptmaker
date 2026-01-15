@@ -62,7 +62,14 @@ PROCESSED_DIR = SCAN_DIR / "processed"
 ERROR_DIR = SCAN_DIR / "error"
 
 # 印刷対象PDFの保存場所（printviewerのPDF_DIR）
-PDF_DIR = Path(r"C:\Users\doctor\printviewer\test_pdfs")
+# 環境変数PDF_DIRが設定されていればそれを使用、なければapp.pyと同じデフォルト値を使用
+PDF_DIR_ENV = os.environ.get("PDF_DIR")
+if PDF_DIR_ENV:
+    PDF_DIR = Path(PDF_DIR_ENV)
+else:
+    # app.pyと同じデフォルト値: Y:\算数科作業フォルダ\10分テスト\test_pdf
+    # ただし、test_pdfsフォルダもフォールバックとして検索対象に含める
+    PDF_DIR = Path(r"Y:\算数科作業フォルダ\10分テスト\test_pdf")
 
 # 印刷対象PDFの中央リポジトリ（オプション）
 PRINT_MATERIALS_ROOT = None  # Path(r"\\server\print_materials")  # 必要に応じて設定
@@ -165,16 +172,37 @@ def guess_filename_from_scan_name(scan_filename: str) -> Optional[str]:
 
 def get_print_pdf_path(original_filename: Optional[str] = None, scan_filename: Optional[str] = None) -> Optional[Path]:
     """ファイル名でPDFファイルのパスを取得"""
+    import difflib
+    
+    # PDF_DIRの存在確認
+    logging.info(f"PDF_DIR存在確認: {PDF_DIR} -> {PDF_DIR.exists()}")
+    if not PDF_DIR.exists():
+        logging.warning(f"PDF_DIRが存在しません: {PDF_DIR}")
     
     # 方法1: QRコードから取得したファイル名で直接検索（最優先）
     if original_filename:
+        # ファイル名の前後の空白を除去
+        original_filename = original_filename.strip()
         # ファイル名をそのまま使って検索（パス区切りを考慮）
+        # Pathオブジェクトで結合（Windowsでも正しく動作）
         pdf_path = PDF_DIR / original_filename
+        # デバッグ: 検索パスをログに出力
+        logging.info(f"検索パス1: {pdf_path} (存在確認: {pdf_path.exists()})")
+        logging.info(f"PDF_DIR: {PDF_DIR} (型: {type(PDF_DIR)}), original_filename: '{original_filename}' (長さ: {len(original_filename)})")
+        
         if pdf_path.exists():
             logging.info(f"印刷対象PDFを発見（QRコードのFILE）: {pdf_path}")
             return pdf_path
         else:
             logging.warning(f"QRコードのFILEに記載されているファイルが見つかりません: {original_filename}")
+            logging.warning(f"検索したパス: {pdf_path}")
+            # 絶対パスでも試行
+            abs_path = pdf_path.resolve()
+            logging.info(f"絶対パスで再試行: {abs_path} (存在確認: {abs_path.exists()})")
+            if abs_path.exists():
+                logging.info(f"印刷対象PDFを発見（絶対パス）: {abs_path}")
+                return abs_path
+            
             # 相対パスでの検索も試行
             if "/" in original_filename or "\\" in original_filename:
                 # パス区切りがある場合は、最後のファイル名部分で検索
@@ -183,6 +211,37 @@ def get_print_pdf_path(original_filename: Optional[str] = None, scan_filename: O
                     if pdf_file.is_file():
                         logging.info(f"印刷対象PDFを発見（ファイル名部分一致）: {pdf_file}")
                         return pdf_file
+                
+                # フォルダパスが一致するファイルを検索
+                folder_path = "/".join(original_filename.split("/")[:-1]) if "/" in original_filename else ""
+                if folder_path:
+                    folder_dir = PDF_DIR / folder_path
+                    if folder_dir.exists():
+                        # 同じフォルダ内でファイル名のキーワードで検索
+                        original_name = Path(original_filename).stem  # 拡張子なし
+                        # キーワードを抽出（アンダースコアやハイフンで分割）
+                        keywords = [k for k in original_name.replace("_", " ").replace("-", " ").split() if len(k) > 1]
+                        
+                        best_match = None
+                        best_score = 0.0
+                        
+                        for pdf_file in folder_dir.glob("*.pdf"):
+                            pdf_name = pdf_file.stem
+                            # 類似度を計算
+                            score = difflib.SequenceMatcher(None, original_name.lower(), pdf_name.lower()).ratio()
+                            
+                            # キーワードマッチング（キーワードが含まれている場合はボーナス）
+                            keyword_match = sum(1 for kw in keywords if kw in pdf_name)
+                            if keyword_match > 0:
+                                score += keyword_match * 0.2
+                            
+                            if score > best_score:
+                                best_score = score
+                                best_match = pdf_file
+                        
+                        if best_match and best_score > 0.3:  # 類似度30%以上
+                            logging.info(f"印刷対象PDFを発見（類似度マッチング、スコア: {best_score:.2f}）: {best_match}")
+                            return best_match
     
     # 方法2: スキャンされたファイル名から推測（FILE=がない場合のフォールバック）
     if scan_filename:
@@ -203,20 +262,61 @@ def get_print_pdf_path(original_filename: Optional[str] = None, scan_filename: O
                             logging.info(f"印刷対象PDFを発見（部分一致検索）: {pdf_file}")
                             return pdf_file
     
-    # 方法3: 中央リポジトリから検索（オプション）
+    # 方法3: フォールバック用のtest_pdfsフォルダを検索（PDF_DIRが異なる場合）
+    fallback_pdf_dir = Path(r"C:\Users\doctor\printviewer\test_pdfs")
+    if fallback_pdf_dir.exists() and fallback_pdf_dir != PDF_DIR and original_filename:
+        # 同じ検索ロジックを適用
+        pdf_path = fallback_pdf_dir / original_filename
+        if pdf_path.exists():
+            logging.info(f"印刷対象PDFを発見（フォールバックフォルダ）: {pdf_path}")
+            return pdf_path
+        
+        # 類似度マッチングも試行
+        if "/" in original_filename or "\\" in original_filename:
+            folder_path = "/".join(original_filename.split("/")[:-1]) if "/" in original_filename else ""
+            if folder_path:
+                folder_dir = fallback_pdf_dir / folder_path
+                if folder_dir.exists():
+                    import difflib
+                    original_name = Path(original_filename).stem
+                    keywords = [k for k in original_name.replace("_", " ").replace("-", " ").split() if len(k) > 1]
+                    
+                    best_match = None
+                    best_score = 0.0
+                    
+                    for pdf_file in folder_dir.glob("*.pdf"):
+                        pdf_name = pdf_file.stem
+                        score = difflib.SequenceMatcher(None, original_name.lower(), pdf_name.lower()).ratio()
+                        keyword_match = sum(1 for kw in keywords if kw in pdf_name)
+                        if keyword_match > 0:
+                            score += keyword_match * 0.2
+                        
+                        if score > best_score:
+                            best_score = score
+                            best_match = pdf_file
+                    
+                    if best_match and best_score > 0.3:
+                        logging.info(f"印刷対象PDFを発見（フォールバックフォルダ、類似度マッチング、スコア: {best_score:.2f}）: {best_match}")
+                        return best_match
+    
+    # 方法4: 中央リポジトリから検索（オプション）
     if PRINT_MATERIALS_ROOT and PRINT_MATERIALS_ROOT.exists() and original_filename:
         pdf_path = PRINT_MATERIALS_ROOT / original_filename
         if pdf_path.exists():
             logging.info(f"印刷対象PDFを発見（中央リポジトリ）: {pdf_path}")
             return pdf_path
     
-    # 方法4: test_pdfsフォルダ内のすべてのPDFをリストアップしてログに出力
+    # 方法5: すべてのPDFをリストアップしてログに出力
+    all_pdfs = []
     if PDF_DIR.exists():
-        all_pdfs = list(PDF_DIR.rglob("*.pdf"))
-        logging.warning(f"印刷対象PDFが見つかりません: {original_filename or scan_filename}")
-        logging.info(f"test_pdfsフォルダ内のPDFファイル数: {len(all_pdfs)}")
-        if len(all_pdfs) <= 10:
-            logging.info(f"利用可能なPDFファイル: {[str(p.relative_to(PDF_DIR)) for p in all_pdfs]}")
+        all_pdfs.extend(list(PDF_DIR.rglob("*.pdf")))
+    if fallback_pdf_dir.exists() and fallback_pdf_dir != PDF_DIR:
+        all_pdfs.extend(list(fallback_pdf_dir.rglob("*.pdf")))
+    
+    logging.warning(f"印刷対象PDFが見つかりません: {original_filename or scan_filename}")
+    logging.info(f"検索対象フォルダ内のPDFファイル数: {len(all_pdfs)}")
+    if len(all_pdfs) <= 20:
+        logging.info(f"利用可能なPDFファイル: {[str(p) for p in all_pdfs[:20]]}")
     
     return None
 

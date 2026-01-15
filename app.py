@@ -131,8 +131,8 @@ def pdf_to_images(filename, username=None, student_name=None, student_number=Non
     os.makedirs(out_dir, exist_ok=True)
 
     # キャッシュキーを生成（ユーザー名、生徒名、生徒番号、テキスト名、校舎名を含む）
-    # バージョン10: QRコードサイズを20%に拡大
-    cache_key = f"v10_{username or ''}_{student_name or ''}_{student_number or ''}_{text_name or ''}_{campus_name or ''}"
+    # バージョン11: QRコードサイズを20%に拡大
+    cache_key = f"v11_{username or ''}_{student_name or ''}_{student_number or ''}_{text_name or ''}_{campus_name or ''}"
     cache_suffix = ""
     if cache_key.strip():
         # ハッシュ値を生成してキャッシュサフィックスとして使用
@@ -259,8 +259,8 @@ def pdf_to_images(filename, username=None, student_name=None, student_number=Non
                         # QRコード画像を生成
                         qr_img = qr.make_image(fill_color="black", back_color="white")
                         
-                        # QRコードのサイズを調整（画像サイズの約10%）
-                        qr_size = int(min(img_width, img_height) * 0.1)
+                        # QRコードのサイズを調整（画像サイズの約20%）
+                        qr_size = int(min(img_width, img_height) * 0.2)
                         qr_img = qr_img.resize((qr_size, qr_size), Image.Resampling.LANCZOS)
                         
                         # QRコードの下にテキストIDを表示するためのフォントを準備
