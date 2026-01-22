@@ -115,7 +115,113 @@ def generate_print_id():
     return f"QS_{year}_{unique_part}"
 
 
-def pdf_to_images(filename, username=None, student_name=None, student_number=None, text_name=None, campus_name=None):
+def create_header_with_qr(filename, username, text_name, campus_name=None):
+    """頭紙PDFにQRコードを重ねて画像を生成"""
+    # 頭紙PDFのパス
+    header_template_path = os.path.join(BASE_DIR, "templates", "頭紙.pdf")
+    if not os.path.exists(header_template_path):
+        raise FileNotFoundError("頭紙テンプレートが見つかりません")
+    
+    # 頭紙PDFを画像に変換（1ページのみ）
+    header_images = convert_from_path(header_template_path, poppler_path=POPPLER_PATH, first_page=1, last_page=1)
+    if not header_images:
+        raise ValueError("頭紙PDFの変換に失敗しました")
+    
+    img = header_images[0]
+    draw = ImageDraw.Draw(img)
+    img_width, img_height = img.size
+    
+    # PRINT_IDを生成
+    print_id = generate_print_id()
+    
+    # 元のファイル名を取得
+    original_filename = filename.replace('\\', '/')
+    
+    # PRINT_IDとファイル名のマッピングを保存
+    save_print_id_mapping(print_id, original_filename)
+    
+    # QRコードのデータを生成
+    encoded_filename = quote(original_filename, safe='/')
+    qr_data = f"PRINT_ID={print_id},FILE={encoded_filename}"
+    
+    # 校舎が選択されている場合、プリンター名をQRコードに追加
+    if campus_name:
+        printer_name = get_printer_name_by_campus(campus_name)
+        if printer_name:
+            qr_data += f",PRINTER={printer_name}"
+    
+    # QRコードを生成
+    qr = qrcode.QRCode(
+        version=1,
+        error_correction=qrcode.constants.ERROR_CORRECT_L,
+        box_size=15,
+        border=4,
+    )
+    qr.add_data(qr_data)
+    qr.make(fit=True)
+    
+    # QRコード画像を生成
+    qr_img = qr.make_image(fill_color="black", back_color="white")
+    
+    # QRコードのサイズを調整（画像サイズの約15%に増加）
+    qr_size = int(min(img_width, img_height) * 0.15)
+    qr_img = qr_img.resize((qr_size, qr_size), Image.Resampling.LANCZOS)
+    
+    # フォントパス
+    font_paths = [
+        "C:/Windows/Fonts/msgothic.ttc",
+        "C:/Windows/Fonts/meiryo.ttc",
+        "C:/Windows/Fonts/msmincho.ttc",
+        "arial.ttf"
+    ]
+    
+    # テキスト用フォントを準備
+    text_font_size = max(14, int(img_width / 80))
+    text_font = None
+    for font_path in font_paths:
+        try:
+            text_font = ImageFont.truetype(font_path, text_font_size)
+            break
+        except Exception:
+            continue
+    if text_font is None:
+        text_font = ImageFont.load_default()
+    
+    # PRINT_IDのテキストのサイズを取得
+    text_id = print_id
+    text_bbox = draw.textbbox((0, 0), text_id, font=text_font)
+    text_text_width = text_bbox[2] - text_bbox[0]
+    text_text_height = text_bbox[3] - text_bbox[1]
+    
+    # テキストの高さを考慮してQRコードの位置を決定（以前と同じ位置：左下）
+    bottom_margin = 15
+    text_margin = 10
+    total_height = qr_size + text_margin + text_text_height + bottom_margin
+    
+    # 左下に配置
+    margin = 20
+    qr_x = margin
+    qr_y = img_height - total_height + bottom_margin
+    
+    # QRコードを画像に貼り付け
+    img.paste(qr_img, (int(qr_x), int(qr_y)))
+    
+    # QRコードの下、中央揃えでテキストを配置
+    text_x = qr_x + (qr_size - text_text_width) / 2
+    text_y = qr_y + qr_size + text_margin
+    
+    # テキストを描画
+    draw.text(
+        (int(text_x), int(text_y)),
+        text_id,
+        fill=(0, 0, 0, 255),
+        font=text_font
+    )
+    
+    return img
+
+
+def pdf_to_images(filename, username=None, student_name=None, student_number=None, text_name=None, campus_name=None, include_qr=False):
     """PDFを画像に変換"""
     # URLデコード
     filename = unquote(filename)
@@ -221,8 +327,8 @@ def pdf_to_images(filename, username=None, student_name=None, student_number=Non
                 
                 # QRコードを生成して左下に配置（PRINT_ID形式）
                 # ※QRコードにはPRINT_IDのみを含み、生徒名・講師名は含まない
-                # テキスト名とユーザー名があれば常にQRコードを表示（生徒名選択は不要）
-                if username and text_name:
+                # include_qrがTrueの場合のみQRコードを表示（頭紙印刷時のみ）
+                if include_qr and username and text_name:
                     try:
                         # PRINT_IDを生成（一意なID）
                         print_id = generate_print_id()
@@ -887,6 +993,69 @@ def view(filename):
         campuses=campuses,
         parent_folder_path=parent_folder_path
     )
+
+
+@app.route("/header/<path:filename>")
+@login_required
+def header(filename):
+    """頭紙を表示・印刷"""
+    # セキュリティチェック
+    if ".." in filename or filename.startswith("\\") or filename.startswith("/"):
+        abort(400)
+    
+    # URLデコード
+    decoded_filename = unquote(filename)
+    pdf_path = os.path.join(PDF_DIR, decoded_filename)
+    if not os.path.exists(pdf_path):
+        abort(404, description="PDFファイルが見つかりません")
+    
+    user = get_current_user()
+    
+    # テキスト名を取得（PDFファイル名から拡張子を除く）
+    text_name = os.path.splitext(os.path.basename(decoded_filename))[0]
+    
+    # クエリパラメータから校舎名を取得（選択された場合）
+    selected_campus_name = request.args.get("campus", "")
+    
+    try:
+        # 頭紙PDFにQRコードを重ねて画像を生成
+        header_img = create_header_with_qr(
+            decoded_filename,
+            username=user,
+            text_name=text_name,
+            campus_name=selected_campus_name if selected_campus_name else None
+        )
+        
+        # 画像サイズを取得
+        img_width, img_height = header_img.size
+        
+        # 画像を2倍のサイズに拡大（印刷時に200%倍率が必要な問題を解決）
+        header_img_large = header_img.resize((img_width * 2, img_height * 2), Image.Resampling.LANCZOS)
+        
+        # 画像をキャッシュディレクトリに保存（DPI情報を設定）
+        base, _ = os.path.splitext(decoded_filename)
+        cache_dir = os.path.join(CACHE_DIR, base)
+        os.makedirs(cache_dir, exist_ok=True)
+        header_file_path = os.path.join(cache_dir, "header.png")
+        # DPI情報を設定（72 DPI = 1インチ = 72ピクセル）
+        # A4 landscape: 297mm x 210mm = 11.69インチ x 8.27インチ
+        # 72 DPIの場合: 842px x 595px
+        # 200 DPIの場合: 2339px x 1654px（pdf2imageのデフォルト）
+        # pdf2imageのデフォルトDPI（200）に合わせる
+        header_img_large.save(header_file_path, "PNG", dpi=(200, 200))
+        
+        # 画像URLを生成
+        base_parts = base.split(os.sep)
+        base_encoded = "/".join([quote(part, safe="") for part in base_parts])
+        image_url = f"/image/{base_encoded}/header.png"
+        
+        # HTMLテンプレートで表示（画像サイズを渡す）
+        return render_template("header.html", image_url=image_url, img_width=img_width, img_height=img_height)
+    except Exception as e:
+        import traceback
+        print(f"ERROR: 頭紙生成エラー: {e}")
+        print(f"ERROR: トレースバック:\n{traceback.format_exc()}")
+        return f"頭紙生成エラー: {e}", 500
 
 
 @app.route("/image/<path:base>/<path:img_name>")

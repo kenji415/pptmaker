@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>頭紙 - QS printer</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+    body {
+      margin: 0;
+      padding: 10px;
+      text-align: center;
+      background-color: #f5f5f5;
+    }
+    .page-wrapper {
+      position: relative;
+      display: inline-block;
+      margin-bottom: 20px;
+    }
+    .page {
+      margin-bottom: 20px;
+      background: white;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+      padding: 10px;
+      display: inline-block;
+    }
+    img {
+      max-width: 100%;
+      height: auto;
+      display: block;
+    }
+    @media print {
+      body {
+        background-color: white;
+        padding: 0;
+        margin: 0;
+        display: block;
+      }
+      .page-wrapper {
+        display: block !important;
+        margin: 0;
+        padding: 0;
+        page-break-after: always;
+        page-break-inside: avoid;
+        break-after: page;
+        break-inside: avoid;
+      }
+      .page-wrapper:last-child {
+        page-break-after: auto;
+        break-after: auto;
+      }
+      .page {
+        page-break-inside: avoid;
+        break-inside: avoid;
+        box-shadow: none;
+        padding: 0;
+        margin: 0;
+        width: 100%;
+        max-width: 100%;
+        display: block;
+        overflow: hidden;
+      }
+      img {
+        width: 100% !important;
+        height: auto !important;
+        max-width: 100% !important;
+        max-height: 100% !important;
+        object-fit: contain;
+        display: block;
+        page-break-inside: avoid;
+        break-inside: avoid;
+        image-rendering: -webkit-optimize-contrast;
+        image-rendering: crisp-edges;
+      }
+      @page {
+        margin: 0.5cm;
+        size: A4 landscape;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="page-wrapper">
+    <div class="page">
+      <img src="{{ image_url }}" alt="頭紙">
+    </div>
+  </div>
+  <script>
+    // ページ読み込み時に自動で印刷ダイアログを表示
+    window.onload = function() {
+      window.print();
+    };
+  </script>
+</body>
+</html>
