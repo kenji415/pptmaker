@@ -160,15 +160,6 @@
       <span>ファイル: {{ filename }}</span>
     </div>
     <div>
-      校舎:
-      <select id="campus" onchange="updatePreview()" style="width:120px; padding: 4px 8px; border: 1px solid #ccc; border-radius: 4px; margin-right: 10px;">
-        <option value="">選択しない</option>
-        {% for campus in campuses %}
-          <option value="{{ campus.key }}" {% if selected_campus_name == campus.key %}selected{% endif %}>
-            {{ campus.name }}
-          </option>
-        {% endfor %}
-      </select>
       生徒名:
       <select id="student_name" onchange="updatePreview()" style="width:150px; padding: 4px 8px; border: 1px solid #ccc; border-radius: 4px; margin-right: 10px;">
         <option value="">選択してください</option>
@@ -221,16 +212,9 @@ document.querySelectorAll('img').forEach(function(img) {
 });
 
 function updatePreview() {
-  // 校舎名と生徒名が選択されたら、ページを再読み込みして画像を更新
-  const campus = document.getElementById("campus").value;
+  // 生徒名が選択されたら、ページを再読み込みして画像を更新
   const studentName = document.getElementById("student_name").value;
   const currentUrl = new URL(window.location.href);
-  
-  if (campus) {
-    currentUrl.searchParams.set("campus", campus);
-  } else {
-    currentUrl.searchParams.delete("campus");
-  }
   
   if (studentName) {
     currentUrl.searchParams.set("student_name", studentName);

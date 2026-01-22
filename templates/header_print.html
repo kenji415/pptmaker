@@ -1,0 +1,423 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>頭紙印刷 - QS printer</title>
+  <style>
+    body {
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      margin: 20px;
+      background-color: #f5f5f5;
+    }
+    .container {
+      max-width: 1200px;
+      margin: 0 auto;
+      background: white;
+      padding: 20px;
+      border-radius: 8px;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    }
+    .header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 20px;
+      padding-bottom: 10px;
+      border-bottom: 2px solid #0078d4;
+    }
+    .header h1 {
+      margin: 0;
+      color: #333;
+    }
+    .header img {
+      max-width: 120px;
+      max-height: 40px;
+      height: auto;
+    }
+    .user-info {
+      text-align: right;
+      color: #666;
+      font-size: 14px;
+    }
+    .user-info a {
+      color: #0078d4;
+      text-decoration: none;
+      margin-left: 10px;
+    }
+    .user-info a:hover {
+      text-decoration: underline;
+    }
+    .nav {
+      margin-top: 8px;
+      display: flex;
+      gap: 10px;
+      justify-content: flex-end;
+    }
+    .nav a {
+      color: #0078d4;
+      text-decoration: none;
+      font-size: 14px;
+    }
+    .nav a:hover {
+      text-decoration: underline;
+    }
+    .form-section {
+      margin-bottom: 30px;
+    }
+    .form-section h2 {
+      margin-bottom: 15px;
+      color: #333;
+      font-size: 18px;
+    }
+    .form-group {
+      margin-bottom: 20px;
+    }
+    .form-group label {
+      display: block;
+      margin-bottom: 8px;
+      font-weight: 500;
+      color: #333;
+    }
+    .form-group select {
+      width: 100%;
+      max-width: 400px;
+      padding: 10px;
+      border: 1px solid #ccc;
+      border-radius: 4px;
+      font-size: 14px;
+    }
+    .file-list {
+      list-style: none;
+      padding: 0;
+      margin: 0;
+      max-height: 400px;
+      overflow-y: auto;
+      border: 1px solid #ddd;
+      border-radius: 4px;
+      background: #f9f9f9;
+    }
+    .file-list li {
+      padding: 12px 15px;
+      border-bottom: 1px solid #eee;
+      cursor: pointer;
+      transition: background-color 0.2s;
+    }
+    .file-list li:hover {
+      background-color: #e9ecef;
+    }
+    .file-list li.selected {
+      background-color: #0078d4;
+      color: white;
+    }
+    .file-list li:last-child {
+      border-bottom: none;
+    }
+    .btn {
+      padding: 10px 20px;
+      border: none;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 14px;
+      font-weight: 500;
+    }
+    .btn-primary {
+      background-color: #0078d4;
+      color: white;
+    }
+    .btn-primary:hover {
+      background-color: #106ebe;
+    }
+    .btn-primary:disabled {
+      background-color: #ccc;
+      cursor: not-allowed;
+    }
+    .btn-secondary {
+      background-color: #6c757d;
+      color: white;
+      margin-left: 10px;
+    }
+    .btn-secondary:hover {
+      background-color: #5a6268;
+    }
+    .search-box-wrapper {
+      position: relative;
+      width: 100%;
+      max-width: 400px;
+      margin-bottom: 10px;
+    }
+    .search-box {
+      position: relative;
+      display: flex;
+      align-items: center;
+    }
+    .search-input {
+      width: 100%;
+      padding: 8px 12px 8px 35px;
+      border: 2px solid #ddd;
+      border-radius: 4px;
+      font-size: 14px;
+    }
+    .search-input:focus {
+      outline: none;
+      border-color: #0078d4;
+    }
+    .search-icon {
+      position: absolute;
+      left: 10px;
+      color: #666;
+      pointer-events: none;
+    }
+    .search-results {
+      position: absolute;
+      background: white;
+      border: 1px solid #ddd;
+      border-radius: 4px;
+      box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+      max-height: 300px;
+      overflow-y: auto;
+      z-index: 100;
+      width: 100%;
+      margin-top: 5px;
+      display: none;
+    }
+    .search-results.show {
+      display: block;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <div>
+        <img src="/logo?v=1" alt="QS printer" onerror="this.style.display='none'">
+        <h1>頭紙印刷</h1>
+      </div>
+      <div class="user-info">
+        ユーザー: {{ username }}<br>
+        <div class="nav">
+          <a href="/">ホーム</a>
+          <a href="/students">生徒登録</a>
+          <a href="/logs">印刷ログ</a>
+          <a href="/logout">ログアウト</a>
+        </div>
+      </div>
+    </div>
+
+    <form id="headerPrintForm">
+      <div class="form-section">
+        <h2>1. 校舎を選択</h2>
+        <div class="form-group">
+          <label for="campus">校舎:</label>
+          <select id="campus" name="campus" required>
+            <option value="">選択してください</option>
+            {% for campus in campuses %}
+              <option value="{{ campus.key }}">{{ campus.name }}</option>
+            {% endfor %}
+          </select>
+        </div>
+      </div>
+
+      <div class="form-section">
+        <h2>2. ファイルを選択</h2>
+        <div class="form-group">
+          <label for="fileSelect">PDFファイル:</label>
+          <div class="search-box-wrapper">
+            <div class="search-box">
+              <span class="search-icon">🔍</span>
+              <input type="text" class="search-input" id="searchInput" placeholder="ファイル検索" oninput="handleSearch()">
+            </div>
+            <div class="search-results" id="searchResults"></div>
+          </div>
+          <ul class="file-list" id="fileList">
+            {% for file in pdf_files %}
+              <li data-file-path="{{ file.file_path }}" onclick="selectFile(this)">
+                {{ file.file_path }}
+              </li>
+            {% endfor %}
+          </ul>
+          <input type="hidden" id="selectedFile" name="file_path" required>
+        </div>
+      </div>
+
+      <div class="form-section">
+        <button type="button" class="btn btn-primary" id="printBtn" onclick="printHeader()" disabled>頭紙を印刷</button>
+        <button type="button" class="btn btn-secondary" onclick="window.location.href='/'">キャンセル</button>
+      </div>
+    </form>
+  </div>
+
+  <script>
+    let selectedFilePath = '';
+    let searchTimeout = null;
+    const allPdfFiles = {{ pdf_files | tojson }};
+
+    function selectFile(element) {
+      // 選択状態を切り替え
+      document.querySelectorAll('.file-list li').forEach(li => {
+        li.classList.remove('selected');
+      });
+      element.classList.add('selected');
+      
+      selectedFilePath = element.getAttribute('data-file-path');
+      document.getElementById('selectedFile').value = selectedFilePath;
+      
+      // 検索結果を非表示
+      document.getElementById('searchResults').classList.remove('show');
+      
+      // 校舎とファイルが選択されたら印刷ボタンを有効化
+      const campus = document.getElementById('campus').value;
+      if (campus && selectedFilePath) {
+        document.getElementById('printBtn').disabled = false;
+      } else {
+        document.getElementById('printBtn').disabled = true;
+      }
+    }
+
+    document.getElementById('campus').addEventListener('change', function() {
+      const campus = this.value;
+      if (campus && selectedFilePath) {
+        document.getElementById('printBtn').disabled = false;
+      } else {
+        document.getElementById('printBtn').disabled = true;
+      }
+    });
+
+    function handleSearch() {
+      const keyword = document.getElementById('searchInput').value.trim();
+      const resultsDiv = document.getElementById('searchResults');
+      
+      // 入力が空の場合は結果を非表示
+      if (!keyword) {
+        resultsDiv.classList.remove('show');
+        // 元のファイルリストを表示
+        displayFileList(allPdfFiles);
+        return;
+      }
+
+      // デバウンス（入力が止まってから0.3秒後に検索）
+      clearTimeout(searchTimeout);
+      searchTimeout = setTimeout(() => {
+        performSearch(keyword);
+      }, 300);
+    }
+
+    function performSearch(keyword) {
+      const resultsDiv = document.getElementById('searchResults');
+      resultsDiv.innerHTML = '検索中...';
+      resultsDiv.classList.add('show');
+
+      // ローカルで検索（ファイル名とパスで検索）
+      const keywordLower = keyword.toLowerCase();
+      const filteredFiles = allPdfFiles.filter(file => {
+        const filePath = file.file_path.toLowerCase();
+        const fileName = file.file_name ? file.file_name.toLowerCase() : '';
+        return filePath.includes(keywordLower) || fileName.includes(keywordLower);
+      });
+
+      displaySearchResults(filteredFiles);
+    }
+
+    function displaySearchResults(results) {
+      const resultsDiv = document.getElementById('searchResults');
+      
+      if (results.length === 0) {
+        resultsDiv.innerHTML = '<div style="padding: 12px;">検索結果が見つかりませんでした</div>';
+        return;
+      }
+
+      let html = '';
+      results.forEach(result => {
+        html += `<div style="padding: 12px; border-bottom: 1px solid #f0f0f0; cursor: pointer; transition: background 0.2s;" onclick="selectFileFromSearch('${result.file_path.replace(/'/g, "\\'")}')" onmouseover="this.style.backgroundColor='#f5f5f5'" onmouseout="this.style.backgroundColor='white'">`;
+        html += `<div style="font-weight: 600; color: #0078d4; margin-bottom: 4px;">${escapeHtml(result.file_name || result.file_path)}</div>`;
+        if (result.folder_path) {
+          html += `<div style="font-size: 12px; color: #666;">${escapeHtml(result.folder_path)}</div>`;
+        }
+        html += '</div>';
+      });
+      
+      resultsDiv.innerHTML = html;
+    }
+
+    function selectFileFromSearch(filePath) {
+      // 検索結果からファイルを選択
+      selectedFilePath = filePath;
+      document.getElementById('selectedFile').value = selectedFilePath;
+      
+      // 検索結果を非表示
+      document.getElementById('searchResults').classList.remove('show');
+      document.getElementById('searchInput').value = '';
+      
+      // ファイルリストを更新して選択状態を表示
+      displayFileList(allPdfFiles);
+      const fileListItem = document.querySelector(`.file-list li[data-file-path="${filePath.replace(/"/g, '&quot;')}"]`);
+      if (fileListItem) {
+        selectFile(fileListItem);
+        // 選択された項目までスクロール
+        fileListItem.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }
+      
+      // 校舎とファイルが選択されたら印刷ボタンを有効化
+      const campus = document.getElementById('campus').value;
+      if (campus && selectedFilePath) {
+        document.getElementById('printBtn').disabled = false;
+      } else {
+        document.getElementById('printBtn').disabled = true;
+      }
+    }
+
+    function displayFileList(files) {
+      const fileList = document.getElementById('fileList');
+      fileList.innerHTML = '';
+      files.forEach(file => {
+        const li = document.createElement('li');
+        li.setAttribute('data-file-path', file.file_path);
+        li.textContent = file.file_path;
+        li.onclick = () => selectFile(li);
+        if (file.file_path === selectedFilePath) {
+          li.classList.add('selected');
+        }
+        fileList.appendChild(li);
+      });
+    }
+
+    function escapeHtml(text) {
+      const div = document.createElement('div');
+      div.textContent = text;
+      return div.innerHTML;
+    }
+
+    // 検索結果の外側をクリックしたら閉じる
+    document.addEventListener('click', function(event) {
+      const searchWrapper = document.querySelector('.search-box-wrapper');
+      if (!searchWrapper.contains(event.target)) {
+        document.getElementById('searchResults').classList.remove('show');
+      }
+    });
+
+    function printHeader() {
+      const campus = document.getElementById('campus').value;
+      const filePath = selectedFilePath;
+      
+      if (!campus || !filePath) {
+        alert('校舎とファイルを選択してください。');
+        return;
+      }
+      
+      // 頭紙のURLを生成（校舎情報を含む）
+      const encodedPath = encodeURIComponent(filePath);
+      const headerUrl = `/header/${encodedPath}?campus=${encodeURIComponent(campus)}`;
+      
+      // 新しいウィンドウで開いて印刷
+      const printWindow = window.open(headerUrl, '_blank');
+      if (printWindow) {
+        printWindow.onload = function() {
+          printWindow.print();
+        };
+      } else {
+        alert('ポップアップがブロックされています。ポップアップを許可してください。');
+      }
+    }
+  </script>
+</body>
+</html>

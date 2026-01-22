@@ -212,27 +212,6 @@
       white-space: nowrap;
       flex-shrink: 0;
     }
-    .header-btn {
-      background: #28a745;
-      color: white;
-      border: none;
-      border-radius: 50%;
-      width: 28px;
-      height: 28px;
-      font-size: 16px;
-      cursor: pointer;
-      position: absolute;
-      right: 405px;
-      flex-shrink: 0;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      line-height: 1;
-      padding: 0;
-    }
-    .header-btn:hover {
-      background: #218838;
-    }
     .add-text-btn {
       background: #0078d4;
       color: white;
@@ -445,6 +424,7 @@
           <a href="/">ホーム</a>
           <a href="/students">生徒登録</a>
           <a href="/logs">印刷ログ</a>
+          <a href="/header-print">頭紙印刷</a>
           <a href="/logout">ログアウト</a>
         </div>
       </div>
@@ -506,7 +486,6 @@
             <div class="file-item-content" onclick="window.location.href='{{ file_url }}'">
               <a href="{{ file_url }}" style="text-decoration: none; color: #0078d4; flex-shrink: 0; white-space: nowrap;">{{ file }}</a>
             </div>
-            <button class="header-btn" onclick="event.stopPropagation(); printHeader('{{ file_url }}', '{{ file_path_normalized }}');" title="頭紙を印刷">📄</button>
             <button class="add-text-btn" onclick="event.stopPropagation(); openTextMappingModal('{{ file_path_normalized }}', '{{ file }}');" title="テキスト対応を追加">+</button>
             {% if mappings and mappings|length > 0 %}
               <div class="file-text-mapping">
@@ -559,22 +538,6 @@
     let currentFilePath = '';
     let currentFileName = '';
     let currentMappings = [];
-
-    function printHeader(fileUrl, filePath) {
-      // ファイルパスをURLエンコード
-      const encodedPath = encodeURIComponent(filePath);
-      // 頭紙のURLを生成
-      const headerUrl = `/header/${encodedPath}`;
-      // 新しいウィンドウで開いて印刷
-      const printWindow = window.open(headerUrl, '_blank');
-      if (printWindow) {
-        printWindow.onload = function() {
-          printWindow.print();
-        };
-      } else {
-        alert('ポップアップがブロックされています。ポップアップを許可してください。');
-      }
-    }
 
     function openTextMappingModal(filePath, fileName) {
       currentFilePath = filePath;

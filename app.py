@@ -175,7 +175,42 @@ def create_header_with_qr(filename, username, text_name, campus_name=None):
         "arial.ttf"
     ]
     
-    # テキスト用フォントを準備
+    # ファイル名のタイトルを中央に表示
+    # ファイル名から拡張子を除く
+    file_title = os.path.splitext(os.path.basename(original_filename))[0]
+    # パス区切り文字をスペースに変換（例: "算数/6年/数の性質" → "算数 6年 数の性質"）
+    file_title = file_title.replace('/', ' ').replace('\\', ' ')
+    
+    # タイトル用フォントを準備（大きめのサイズ）
+    title_font_size = max(32, int(img_width / 40))
+    title_font = None
+    for font_path in font_paths:
+        try:
+            title_font = ImageFont.truetype(font_path, title_font_size)
+            break
+        except Exception:
+            continue
+    if title_font is None:
+        title_font = ImageFont.load_default()
+    
+    # タイトルのサイズを取得
+    title_bbox = draw.textbbox((0, 0), file_title, font=title_font)
+    title_width = title_bbox[2] - title_bbox[0]
+    title_height = title_bbox[3] - title_bbox[1]
+    
+    # 画面中央にタイトルを配置
+    title_x = (img_width - title_width) / 2
+    title_y = (img_height - title_height) / 2
+    
+    # タイトルを描画
+    draw.text(
+        (int(title_x), int(title_y)),
+        file_title,
+        fill=(0, 0, 0, 255),
+        font=title_font
+    )
+    
+    # テキスト用フォントを準備（PRINT_ID用）
     text_font_size = max(14, int(img_width / 80))
     text_font = None
     for font_path in font_paths:
@@ -237,8 +272,8 @@ def pdf_to_images(filename, username=None, student_name=None, student_number=Non
     os.makedirs(out_dir, exist_ok=True)
 
     # キャッシュキーを生成（ユーザー名、生徒名、生徒番号、テキスト名、校舎名を含む）
-    # バージョン11: QRコードサイズを20%に拡大
-    cache_key = f"v11_{username or ''}_{student_name or ''}_{student_number or ''}_{text_name or ''}_{campus_name or ''}"
+    # バージョン14: 画面右上に「生徒名：○○　講師名：○○」の形式で表示
+    cache_key = f"v14_{username or ''}_{student_name or ''}_{student_number or ''}_{text_name or ''}_{campus_name or ''}_{include_qr}"
     cache_suffix = ""
     if cache_key.strip():
         # ハッシュ値を生成してキャッシュサフィックスとして使用
@@ -267,8 +302,8 @@ def pdf_to_images(filename, username=None, student_name=None, student_number=Non
             try:
                 draw = ImageDraw.Draw(img)
                 img_width, img_height = img.size
-                # フォントサイズを下げる
-                font_size = max(20, int(img_width / 60))
+                # フォントサイズを少し大きく（画面右上に表示）
+                font_size = max(20, int(img_width / 80))
                 
                 font = None
                 font_paths = [
@@ -287,40 +322,34 @@ def pdf_to_images(filename, username=None, student_name=None, student_number=Non
                 if font is None:
                     font = ImageFont.load_default()
                 
-                # 生徒番号を画面下中央の0.61の位置に描画（生徒番号がある場合のみ）
-                if student_number:
-                    student_number_text = student_number
-                    bbox = draw.textbbox((0, 0), student_number_text, font=font)
-                    text_width = bbox[2] - bbox[0]
-                    text_height = bbox[3] - bbox[1]
-                    
-                    # 画面下中央の0.61の位置（中央揃え）
-                    x_pos = (img_width - text_width) / 2
-                    y_pos = int(img_height * 0.61) - text_height / 2
-                    
-                    # テキストを描画（背景なし）
-                    draw.text(
-                        (x_pos, y_pos),
-                        student_number_text,
-                        fill=(0, 0, 0, 255),
-                        font=font
-                    )
+                # 画面右上に「生徒名：○○　講師名：○○」の形式で表示
+                top_margin = 15  # 画面上端からの余白
+                right_margin = 20  # 右端からの余白
+                text_spacing = 15  # テキスト間のスペース
                 
-                # ユーザー名（講師名）を画面下中央の0.73の位置に描画
+                # 表示するテキストを組み立て
+                display_text_parts = []
+                if student_name:
+                    display_text_parts.append(f"生徒名：{student_name}")
                 if username:
-                    username_text = username
-                    bbox = draw.textbbox((0, 0), username_text, font=font)
+                    display_text_parts.append(f"講師名：{username}")
+                
+                if display_text_parts:
+                    display_text = "　".join(display_text_parts)  # 全角スペースで区切る
+                    
+                    # テキストのサイズを取得
+                    bbox = draw.textbbox((0, 0), display_text, font=font)
                     text_width = bbox[2] - bbox[0]
                     text_height = bbox[3] - bbox[1]
                     
-                    # 画面下中央の0.73の位置（中央揃え）
-                    x_pos = (img_width - text_width) / 2
-                    y_pos = int(img_height * 0.73) - text_height / 2
+                    # 画面右上に配置（右揃え）
+                    x_pos = img_width - text_width - right_margin
+                    y_pos = top_margin
                     
-                    # テキストを描画（背景なし）
+                    # テキストを描画
                     draw.text(
                         (x_pos, y_pos),
-                        username_text,
+                        display_text,
                         fill=(0, 0, 0, 255),
                         font=font
                     )
@@ -937,21 +966,8 @@ def view(filename):
                 selected_student_number = student.get("student_number", "")
                 break
 
-    # クエリパラメータから校舎名を取得（選択された場合）
-    selected_campus_name = request.args.get("campus", "")
-
     # テキスト名を取得（PDFファイル名から拡張子を除く）
     text_name = os.path.splitext(os.path.basename(decoded_filename))[0]
-
-    # プリンタ設定を読み込んで校舎リストを取得
-    printer_config = load_printer_config()
-    campuses = []
-    for campus_key, campus_config in printer_config.items():
-        if campus_key in ["yotsuya", "azabujuban"]:  # 四谷校と麻布十番校のみ
-            campuses.append({
-                "key": campus_key,
-                "name": campus_key.replace("yotsuya", "四谷校").replace("azabujuban", "麻布十番校")
-            })
 
     try:
         image_paths = pdf_to_images(
@@ -960,7 +976,8 @@ def view(filename):
             student_name=selected_student_name if selected_student_name else None,
             student_number=selected_student_number if selected_student_number else None,
             text_name=text_name,  # 生徒名選択に関係なく常に渡す
-            campus_name=selected_campus_name if selected_campus_name else None
+            campus_name=None,  # 通常のプレビューでは校舎情報は不要
+            include_qr=False  # 通常のプレビューではQRコードは不要
         )
     except Exception as e:
         return f"画像変換エラー: {e}", 500
@@ -989,9 +1006,34 @@ def view(filename):
         image_urls=image_urls,
         students=students,
         selected_student_name=selected_student_name,
-        selected_campus_name=selected_campus_name,
-        campuses=campuses,
         parent_folder_path=parent_folder_path
+    )
+
+
+@app.route("/header-print")
+@login_required
+def header_print():
+    """頭紙印刷ページ"""
+    user = get_current_user()
+    
+    # プリンタ設定を読み込んで校舎リストを取得
+    printer_config = load_printer_config()
+    campuses = []
+    for campus_key, campus_config in printer_config.items():
+        if campus_key in ["yotsuya", "azabujuban"]:  # 四谷校と麻布十番校のみ
+            campuses.append({
+                "key": campus_key,
+                "name": campus_key.replace("yotsuya", "四谷校").replace("azabujuban", "麻布十番校")
+            })
+    
+    # すべてのPDFファイルを取得
+    pdf_files = get_all_pdf_files()
+    
+    return render_template(
+        "header_print.html",
+        username=user,
+        campuses=campuses,
+        pdf_files=pdf_files
     )
 
 
