@@ -54,10 +54,22 @@ def load_users():
     """ユーザー情報を読み込む"""
     users = {}
     if os.path.exists(USERS_FILE):
-        with open(USERS_FILE, "r", encoding="utf-8") as f:
-            reader = csv.DictReader(f)
-            for row in reader:
-                users[row["username"]] = row["password_hash"]
+        try:
+            with open(USERS_FILE, "r", encoding="utf-8") as f:
+                reader = csv.DictReader(f)
+                for row in reader:
+                    # ヘッダー行が存在し、必要なキーがあることを確認
+                    if "username" in row and "password_hash" in row:
+                        users[row["username"]] = row["password_hash"]
+                    elif len(row) >= 2:
+                        # ヘッダー行がない場合のフォールバック（最初の列がusername、2番目がpassword_hash）
+                        keys = list(row.keys())
+                        if len(keys) >= 2:
+                            users[row[keys[0]]] = row[keys[1]]
+        except Exception as e:
+            import traceback
+            print(f"ERROR: ユーザーファイル読み込みエラー: {e}")
+            print(f"ERROR: トレースバック:\n{traceback.format_exc()}")
     return users
 
 
@@ -272,8 +284,8 @@ def pdf_to_images(filename, username=None, student_name=None, student_number=Non
     os.makedirs(out_dir, exist_ok=True)
 
     # キャッシュキーを生成（ユーザー名、生徒名、生徒番号、テキスト名、校舎名を含む）
-    # バージョン14: 画面右上に「生徒名：○○　講師名：○○」の形式で表示
-    cache_key = f"v14_{username or ''}_{student_name or ''}_{student_number or ''}_{text_name or ''}_{campus_name or ''}_{include_qr}"
+    # バージョン19: 画面右上に「生徒名：○○　講師名：○○」の形式で表示、PDF内容全体を下と右にシフト
+    cache_key = f"v19_{username or ''}_{student_name or ''}_{student_number or ''}_{text_name or ''}_{campus_name or ''}_{include_qr}"
     cache_suffix = ""
     if cache_key.strip():
         # ハッシュ値を生成してキャッシュサフィックスとして使用
@@ -296,7 +308,20 @@ def pdf_to_images(filename, username=None, student_name=None, student_number=Non
     # PDFを画像に変換
     images = convert_from_path(pdf_path, poppler_path=POPPLER_PATH)
     image_paths = []
+    # 印刷時の位置調整：PDF内容全体を下にシフトするための余白
+    bottom_padding = 60  # 上に追加する余白（ピクセル）- 画像を下にシフトするため
+    right_padding = 30  # 左に追加する余白（ピクセル）- 画像を右にシフトするため
+    
     for i, img in enumerate(images, start=1):
+        # 元の画像サイズを取得
+        original_width, original_height = img.size
+        
+        # 上と左に余白を追加した新しい画像を作成（画像を下と右にシフトするため）
+        new_img = Image.new('RGB', (original_width + right_padding, original_height + bottom_padding), color='white')
+        # 元の画像を新しい画像の右下側に配置（上と左に余白ができ、画像が下と右にシフトされる）
+        new_img.paste(img, (right_padding, bottom_padding))
+        img = new_img  # 以降は新しい画像を使用
+        
         # 1枚目でテキスト名がある場合、またはユーザー名/生徒情報が指定されている場合、テキストを描画
         if i == 1 and (username or student_name or student_number or text_name):
             try:
@@ -323,7 +348,7 @@ def pdf_to_images(filename, username=None, student_name=None, student_number=Non
                     font = ImageFont.load_default()
                 
                 # 画面右上に「生徒名：○○　講師名：○○」の形式で表示
-                top_margin = 15  # 画面上端からの余白
+                top_margin = 50  # 画面上端からの余白（印刷時のマージンを考慮して下げる）
                 right_margin = 20  # 右端からの余白
                 text_spacing = 15  # テキスト間のスペース
                 
@@ -1019,11 +1044,24 @@ def header_print():
     # プリンタ設定を読み込んで校舎リストを取得
     printer_config = load_printer_config()
     campuses = []
+    # 校舎名のマッピング
+    campus_name_mapping = {
+        "yotsuya": "四谷校",
+        "azabujuban": "麻布十番校",
+        "yoyogi": "代々木校",
+        "jiyugaoka": "自由が丘校",
+        "kichijoji": "吉祥寺校",
+        "tokyo": "東京校",
+        "yokohama": "横浜校",
+        "seijogakuen": "成城学園校",
+        "ochanomizu": "お茶の水校",
+        "kyotoekimae": "京都駅前校"
+    }
     for campus_key, campus_config in printer_config.items():
-        if campus_key in ["yotsuya", "azabujuban"]:  # 四谷校と麻布十番校のみ
+        if campus_key in campus_name_mapping:
             campuses.append({
                 "key": campus_key,
-                "name": campus_key.replace("yotsuya", "四谷校").replace("azabujuban", "麻布十番校")
+                "name": campus_name_mapping[campus_key]
             })
     
     # すべてのPDFファイルを取得
@@ -1040,7 +1078,7 @@ def header_print():
 @app.route("/header/<path:filename>")
 @login_required
 def header(filename):
-    """頭紙を表示・印刷"""
+    """頭紙を表示・印刷（単一ファイル）"""
     # セキュリティチェック
     if ".." in filename or filename.startswith("\\") or filename.startswith("/"):
         abort(400)
@@ -1100,6 +1138,94 @@ def header(filename):
         return f"頭紙生成エラー: {e}", 500
 
 
+@app.route("/headers-batch", methods=["POST"])
+@login_required
+def headers_batch():
+    """複数の頭紙を一括表示・印刷"""
+    user = get_current_user()
+    
+    # JSONデータからファイルリストと校舎名を取得
+    try:
+        data = request.get_json()
+        if data is None:
+            # JSONが送信されていない場合、フォームデータから取得を試みる
+            data = request.form.to_dict()
+            if "files" in data:
+                import json
+                data["files"] = json.loads(data["files"])
+        
+        if data is None:
+            return jsonify({"error": "リクエストデータが無効です"}), 400
+        
+        file_paths = data.get("files", [])
+        selected_campus_name = data.get("campus", "")
+        
+        if not file_paths or not selected_campus_name:
+            return jsonify({"error": "ファイルと校舎を選択してください"}), 400
+    except Exception as e:
+        import traceback
+        print(f"ERROR: リクエスト解析エラー: {e}")
+        print(f"ERROR: トレースバック:\n{traceback.format_exc()}")
+        return jsonify({"error": f"リクエスト解析エラー: {str(e)}"}), 400
+    
+    image_urls = []
+    img_width = None
+    img_height = None
+    
+    try:
+        for file_path in file_paths:
+            # セキュリティチェック
+            if ".." in file_path or file_path.startswith("\\") or file_path.startswith("/"):
+                continue
+            
+            decoded_filename = unquote(file_path)
+            pdf_path = os.path.join(PDF_DIR, decoded_filename)
+            if not os.path.exists(pdf_path):
+                continue
+            
+            # テキスト名を取得
+            text_name = os.path.splitext(os.path.basename(decoded_filename))[0]
+            
+            # 頭紙PDFにQRコードを重ねて画像を生成
+            header_img = create_header_with_qr(
+                decoded_filename,
+                username=user,
+                text_name=text_name,
+                campus_name=selected_campus_name if selected_campus_name else None
+            )
+            
+            # 画像サイズを取得（最初の1つを基準にする）
+            if img_width is None:
+                img_width, img_height = header_img.size
+            
+            # 画像を2倍のサイズに拡大
+            header_img_large = header_img.resize((img_width * 2, img_height * 2), Image.Resampling.LANCZOS)
+            
+            # 画像をキャッシュディレクトリに保存
+            base, _ = os.path.splitext(decoded_filename)
+            cache_dir = os.path.join(CACHE_DIR, base)
+            os.makedirs(cache_dir, exist_ok=True)
+            header_file_path = os.path.join(cache_dir, "header.png")
+            header_img_large.save(header_file_path, "PNG", dpi=(200, 200))
+            
+            # 画像URLを生成
+            base_parts = base.split(os.sep)
+            base_encoded = "/".join([quote(part, safe="") for part in base_parts])
+            image_url = f"/image/{base_encoded}/header.png"
+            image_urls.append(image_url)
+        
+        if not image_urls:
+            return jsonify({"error": "有効なファイルが見つかりませんでした"}), 400
+        
+        # HTMLテンプレートで表示（複数の画像URLを渡す）
+        return render_template("header_batch.html", image_urls=image_urls, img_width=img_width, img_height=img_height)
+    except Exception as e:
+        import traceback
+        print(f"ERROR: 頭紙一括生成エラー: {e}")
+        print(f"ERROR: トレースバック:\n{traceback.format_exc()}")
+        return f"頭紙一括生成エラー: {e}", 500
+
+
 @app.route("/image/<path:base>/<path:img_name>")
 def image(base, img_name):
     """画像を返す"""
@@ -1118,6 +1244,34 @@ def image(base, img_name):
         abort(404)
 
     return send_file(img_path, mimetype="image/png")
+
+
+@app.route("/download/<path:filename>")
+@login_required
+def download_pdf(filename):
+    """PDFファイルをダウンロード"""
+    # セキュリティチェック
+    if ".." in filename or filename.startswith("\\") or filename.startswith("/"):
+        abort(400)
+    
+    # URLデコード
+    decoded_filename = unquote(filename)
+    pdf_path = os.path.join(PDF_DIR, decoded_filename)
+    
+    if not os.path.exists(pdf_path):
+        abort(404, description="PDFファイルが見つかりません")
+    
+    # ファイル名を取得（パス区切り文字をアンダースコアに変換してファイル名として使用）
+    safe_filename = os.path.basename(decoded_filename)
+    if not safe_filename:
+        safe_filename = "download.pdf"
+    
+    return send_file(
+        pdf_path,
+        mimetype="application/pdf",
+        as_attachment=True,
+        download_name=safe_filename
+    )
 
 
 @app.route("/log_print", methods=["POST"])
@@ -1226,6 +1380,34 @@ def logo():
 def favicon():
     """ファビコン"""
     abort(404)
+
+
+@app.errorhandler(500)
+def internal_error(error):
+    """内部サーバーエラーのハンドラー"""
+    import traceback
+    error_msg = str(error)
+    traceback_str = traceback.format_exc()
+    print(f"ERROR: 内部サーバーエラー: {error_msg}")
+    print(f"ERROR: トレースバック:\n{traceback_str}")
+    return jsonify({"error": "内部サーバーエラーが発生しました。詳細はサーバーログを確認してください。"}), 500
+
+
+@app.errorhandler(Exception)
+def handle_exception(e):
+    """すべての例外をキャッチするハンドラー"""
+    import traceback
+    error_msg = str(e)
+    traceback_str = traceback.format_exc()
+    print(f"ERROR: 予期しないエラー: {error_msg}")
+    print(f"ERROR: トレースバック:\n{traceback_str}")
+    
+    # JSONリクエストの場合はJSONで返す
+    if request.is_json or request.path.startswith('/api') or request.path.startswith('/headers-batch'):
+        return jsonify({"error": f"エラーが発生しました: {error_msg}"}), 500
+    
+    # それ以外はHTMLエラーページを返す
+    return f"エラーが発生しました: {error_msg}", 500
 
 
 if __name__ == "__main__":

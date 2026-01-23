@@ -169,6 +169,7 @@
           </option>
         {% endfor %}
       </select>
+      <button onclick="downloadPdf()" style="margin-right: 10px;">PDF保存</button>
       <button onclick="printNow()">印刷</button>
     </div>
   </div>
@@ -223,6 +224,24 @@ function updatePreview() {
   }
   
   window.location.href = currentUrl.toString();
+}
+
+function downloadPdf() {
+  // PDFファイルをダウンロード
+  const filename = "{{ filename|urlencode }}";
+  const downloadUrl = `/download/${filename}`;
+  
+  // ファイル名からベース名を取得（パス区切り文字の最後の部分）
+  const originalFilename = "{{ filename }}";
+  const basename = originalFilename.split(/[/\\]/).pop() || "download.pdf";
+  
+  // 新しいタブで開いてダウンロードを開始
+  const link = document.createElement('a');
+  link.href = downloadUrl;
+  link.download = basename;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
 }
 
 function printNow() {
