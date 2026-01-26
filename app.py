@@ -1217,13 +1217,53 @@ def headers_batch():
         if not image_urls:
             return jsonify({"error": "有効なファイルが見つかりませんでした"}), 400
         
-        # HTMLテンプレートで表示（複数の画像URLを渡す）
-        return render_template("header_batch.html", image_urls=image_urls, img_width=img_width, img_height=img_height)
+        # 一括印刷用のURLを生成（クエリパラメータで画像URLを渡す）
+        # または、セッションに保存してからリダイレクト
+        import base64
+        import json as json_module
+        
+        # 画像URLをJSONエンコードしてbase64エンコード
+        image_urls_json = json_module.dumps(image_urls)
+        image_urls_encoded = base64.urlsafe_b64encode(image_urls_json.encode('utf-8')).decode('utf-8')
+        
+        # 一括印刷ページのURLを返す
+        batch_url = f"/headers-batch-view?images={image_urls_encoded}&width={img_width}&height={img_height}"
+        
+        return jsonify({"url": batch_url})
     except Exception as e:
         import traceback
         print(f"ERROR: 頭紙一括生成エラー: {e}")
         print(f"ERROR: トレースバック:\n{traceback.format_exc()}")
         return f"頭紙一括生成エラー: {e}", 500
+
+
+@app.route("/headers-batch-view")
+@login_required
+def headers_batch_view():
+    """一括印刷用の頭紙を表示"""
+    import base64
+    import json as json_module
+    
+    # クエリパラメータから画像URLを取得
+    images_encoded = request.args.get("images", "")
+    if not images_encoded:
+        abort(400, description="画像データが指定されていません")
+    
+    try:
+        # base64デコードしてJSONを取得
+        image_urls_json = base64.urlsafe_b64decode(images_encoded.encode('utf-8')).decode('utf-8')
+        image_urls = json_module.loads(image_urls_json)
+        
+        # 画像サイズを取得（オプション）
+        img_width = request.args.get("width", type=int)
+        img_height = request.args.get("height", type=int)
+        
+        return render_template("header_batch.html", image_urls=image_urls, img_width=img_width, img_height=img_height)
+    except Exception as e:
+        import traceback
+        print(f"ERROR: 頭紙一括表示エラー: {e}")
+        print(f"ERROR: トレースバック:\n{traceback.format_exc()}")
+        return f"頭紙一括表示エラー: {e}", 500
 
 
 @app.route("/image/<path:base>/<path:img_name>")

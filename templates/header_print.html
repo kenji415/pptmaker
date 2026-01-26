@@ -102,16 +102,37 @@
       border-bottom: 1px solid #eee;
       cursor: pointer;
       transition: background-color 0.2s;
+      display: flex;
+      align-items: center;
     }
     .file-list li:hover {
       background-color: #e9ecef;
     }
     .file-list li.selected {
-      background-color: #0078d4;
-      color: white;
+      background-color: #e3f2fd;
     }
     .file-list li:last-child {
       border-bottom: none;
+    }
+    .file-checkbox {
+      margin-right: 10px;
+      width: 18px;
+      height: 18px;
+      cursor: pointer;
+    }
+    .file-name {
+      flex: 1;
+    }
+    .selection-controls {
+      display: flex;
+      gap: 10px;
+      margin-bottom: 10px;
+      align-items: center;
+    }
+    .selected-count {
+      color: #666;
+      font-size: 14px;
+      margin-left: auto;
     }
     .btn {
       padding: 10px 20px;
@@ -229,19 +250,26 @@
             </div>
             <div class="search-results" id="searchResults"></div>
           </div>
+          <div class="selection-controls">
+            <button type="button" class="btn btn-secondary" onclick="selectAll()" style="margin-left: 0;">すべて選択</button>
+            <button type="button" class="btn btn-secondary" onclick="deselectAll()">すべて解除</button>
+            <span class="selected-count" id="selectedCount">選択: 0件</span>
+          </div>
           <ul class="file-list" id="fileList">
             {% for file in pdf_files %}
-              <li data-file-path="{{ file.file_path }}" onclick="selectFile(this)">
-                {{ file.file_path }}
+              <li data-file-path="{{ file.file_path }}">
+                <input type="checkbox" class="file-checkbox" data-file-path="{{ file.file_path }}" onchange="updateSelection()">
+                <span class="file-name">{{ file.file_path }}</span>
               </li>
             {% endfor %}
           </ul>
-          <input type="hidden" id="selectedFile" name="file_path" required>
+          <input type="hidden" id="selectedFile" name="file_path">
         </div>
       </div>
 
       <div class="form-section">
-        <button type="button" class="btn btn-primary" id="printBtn" onclick="printHeader()" disabled>頭紙を印刷</button>
+        <button type="button" class="btn btn-primary" id="printBtn" onclick="printHeader()" disabled>頭紙を印刷（単一）</button>
+        <button type="button" class="btn btn-primary" id="batchPrintBtn" onclick="printBatch()" disabled>頭紙を一括印刷</button>
         <button type="button" class="btn btn-secondary" onclick="window.location.href='/'">キャンセル</button>
       </div>
     </form>
@@ -252,35 +280,58 @@
     let searchTimeout = null;
     const allPdfFiles = {{ pdf_files | tojson }};
 
-    function selectFile(element) {
-      // 選択状態を切り替え
-      document.querySelectorAll('.file-list li').forEach(li => {
-        li.classList.remove('selected');
-      });
-      element.classList.add('selected');
+    function updateSelection() {
+      const checkboxes = document.querySelectorAll('.file-checkbox:checked');
+      const selectedFiles = Array.from(checkboxes).map(cb => cb.getAttribute('data-file-path'));
       
-      selectedFilePath = element.getAttribute('data-file-path');
-      document.getElementById('selectedFile').value = selectedFilePath;
+      // 選択されたファイル数を表示
+      const count = selectedFiles.length;
+      document.getElementById('selectedCount').textContent = `選択: ${count}件`;
       
-      // 検索結果を非表示
-      document.getElementById('searchResults').classList.remove('show');
-      
-      // 校舎とファイルが選択されたら印刷ボタンを有効化
-      const campus = document.getElementById('campus').value;
-      if (campus && selectedFilePath) {
-        document.getElementById('printBtn').disabled = false;
+      // 単一選択の場合は最初の1つをselectedFilePathに設定
+      if (count === 1) {
+        selectedFilePath = selectedFiles[0];
+        document.getElementById('selectedFile').value = selectedFilePath;
       } else {
-        document.getElementById('printBtn').disabled = true;
+        selectedFilePath = '';
+        document.getElementById('selectedFile').value = '';
       }
+      
+      // 選択状態の視覚的フィードバック
+      document.querySelectorAll('.file-list li').forEach(li => {
+        const checkbox = li.querySelector('.file-checkbox');
+        if (checkbox && checkbox.checked) {
+          li.classList.add('selected');
+        } else {
+          li.classList.remove('selected');
+        }
+      });
+      
+      // 校舎とファイルが選択されたらボタンを有効化
+      const campus = document.getElementById('campus').value;
+      const hasSingleFile = count === 1;
+      const hasMultipleFiles = count > 0;
+      
+      document.getElementById('printBtn').disabled = !(campus && hasSingleFile);
+      document.getElementById('batchPrintBtn').disabled = !(campus && hasMultipleFiles);
+    }
+
+    function selectAll() {
+      document.querySelectorAll('.file-checkbox').forEach(cb => {
+        cb.checked = true;
+      });
+      updateSelection();
+    }
+
+    function deselectAll() {
+      document.querySelectorAll('.file-checkbox').forEach(cb => {
+        cb.checked = false;
+      });
+      updateSelection();
     }
 
     document.getElementById('campus').addEventListener('change', function() {
-      const campus = this.value;
-      if (campus && selectedFilePath) {
-        document.getElementById('printBtn').disabled = false;
-      } else {
-        document.getElementById('printBtn').disabled = true;
-      }
+      updateSelection();
     });
 
     function handleSearch() {
@@ -340,45 +391,49 @@
     }
 
     function selectFileFromSearch(filePath) {
-      // 検索結果からファイルを選択
-      selectedFilePath = filePath;
-      document.getElementById('selectedFile').value = selectedFilePath;
+      // 検索結果からファイルを選択（チェックボックスをチェック）
+      const checkbox = document.querySelector(`.file-checkbox[data-file-path="${filePath.replace(/"/g, '&quot;')}"]`);
+      if (checkbox) {
+        checkbox.checked = true;
+        updateSelection();
+        // 選択された項目までスクロール
+        const li = checkbox.closest('li');
+        if (li) {
+          li.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }
+      }
       
       // 検索結果を非表示
       document.getElementById('searchResults').classList.remove('show');
       document.getElementById('searchInput').value = '';
-      
-      // ファイルリストを更新して選択状態を表示
-      displayFileList(allPdfFiles);
-      const fileListItem = document.querySelector(`.file-list li[data-file-path="${filePath.replace(/"/g, '&quot;')}"]`);
-      if (fileListItem) {
-        selectFile(fileListItem);
-        // 選択された項目までスクロール
-        fileListItem.scrollIntoView({ behavior: 'smooth', block: 'center' });
-      }
-      
-      // 校舎とファイルが選択されたら印刷ボタンを有効化
-      const campus = document.getElementById('campus').value;
-      if (campus && selectedFilePath) {
-        document.getElementById('printBtn').disabled = false;
-      } else {
-        document.getElementById('printBtn').disabled = true;
-      }
     }
 
     function displayFileList(files) {
       const fileList = document.getElementById('fileList');
+      const currentSelections = new Set(Array.from(document.querySelectorAll('.file-checkbox:checked')).map(cb => cb.getAttribute('data-file-path')));
+      
       fileList.innerHTML = '';
       files.forEach(file => {
         const li = document.createElement('li');
         li.setAttribute('data-file-path', file.file_path);
-        li.textContent = file.file_path;
-        li.onclick = () => selectFile(li);
-        if (file.file_path === selectedFilePath) {
-          li.classList.add('selected');
-        }
+        
+        const checkbox = document.createElement('input');
+        checkbox.type = 'checkbox';
+        checkbox.className = 'file-checkbox';
+        checkbox.setAttribute('data-file-path', file.file_path);
+        checkbox.checked = currentSelections.has(file.file_path);
+        checkbox.onchange = updateSelection;
+        
+        const span = document.createElement('span');
+        span.className = 'file-name';
+        span.textContent = file.file_path;
+        
+        li.appendChild(checkbox);
+        li.appendChild(span);
         fileList.appendChild(li);
       });
+      
+      updateSelection();
     }
 
     function escapeHtml(text) {
@@ -417,6 +472,50 @@
       } else {
         alert('ポップアップがブロックされています。ポップアップを許可してください。');
       }
+    }
+
+    function printBatch() {
+      const campus = document.getElementById('campus').value;
+      const checkboxes = document.querySelectorAll('.file-checkbox:checked');
+      const selectedFiles = Array.from(checkboxes).map(cb => cb.getAttribute('data-file-path'));
+      
+      if (!campus || selectedFiles.length === 0) {
+        alert('校舎とファイルを選択してください。');
+        return;
+      }
+      
+      // 一括印刷用のエンドポイントに送信
+      fetch('/headers-batch', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          campus: campus,
+          files: selectedFiles
+        })
+      })
+      .then(response => response.json())
+      .then(data => {
+        if (data.error) {
+          alert('エラー: ' + data.error);
+          return;
+        }
+        
+        // 新しいウィンドウで開いて印刷
+        const printWindow = window.open(data.url, '_blank');
+        if (printWindow) {
+          printWindow.onload = function() {
+            printWindow.print();
+          };
+        } else {
+          alert('ポップアップがブロックされています。ポップアップを許可してください。');
+        }
+      })
+      .catch(error => {
+        console.error('Error:', error);
+        alert('一括印刷の実行中にエラーが発生しました。');
+      });
     }
   </script>
 </body>
