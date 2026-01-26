@@ -10,12 +10,25 @@ azabujuban:
   max_copies: 5
 
 jiyugaoka:
-  printer_name: "Canon_iR_ADV_JIYUGAOKA"
+  printer_name: "自由が丘"
   max_copies: 5
 
 kichijoji:
-  printer_name: "EPSON_BIZ_KICHIJOJI"
+  printer_name: "吉祥寺"
   max_copies: 5
 
+yoyogi:
+  printer_name: "代々木"
+  max_copies: 5
 
+tokyo:
+  printer_name: "東京"
+  max_copies: 5
 
+yokohama:
+  printer_name: "横浜"
+  max_copies: 5
+
+seijogakuen:
+  printer_name: "成城"
+  max_copies: 5
