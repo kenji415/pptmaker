@@ -1419,7 +1419,9 @@ def logo():
 @app.route("/favicon.ico")
 def favicon():
     """ファビコン"""
-    abort(404)
+    # ファビコンが存在しない場合は静かに404を返す（エラーログを出さない）
+    from flask import Response
+    return Response(status=404)
 
 
 @app.errorhandler(500)

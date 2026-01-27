@@ -13,6 +13,13 @@ from pathlib import Path
 from typing import Optional
 from urllib.parse import unquote
 
+try:
+    import yaml
+    HAS_YAML = True
+except ImportError:
+    HAS_YAML = False
+    logging.warning("yaml not available. Install: pip install PyYAML")
+
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 
@@ -80,8 +87,77 @@ LOG_CSV = Path("print_log_yotsuya.csv")
 # PRINT_IDとファイル名のマッピングファイル（printviewer側で生成される想定）
 PRINT_ID_MAPPING_FILE = Path(r"C:\Users\doctor\printviewer\print_id_mapping.csv")
 
+# プリンタ設定ファイル
+PRINTERS_CONFIG = Path(r"C:\Users\doctor\printviewer\printers.yaml")
+
 # プリンタ名（四谷校）
 PRINTER_NAME = "執務室"  # FF Apeos C7070 PS H2
+
+
+def load_printer_config():
+    """プリンタ設定を読み込む"""
+    if not PRINTERS_CONFIG.exists():
+        return {}
+    
+    if not HAS_YAML:
+        logging.warning("yamlモジュールが利用できないため、プリンタ設定ファイルを読み込めません")
+        return {}
+    
+    try:
+        with open(PRINTERS_CONFIG, "r", encoding="utf-8") as f:
+            config = yaml.safe_load(f)
+            return config or {}
+    except Exception as e:
+        logging.warning(f"プリンタ設定ファイルの読み込みエラー: {e}")
+        return {}
+
+
+def find_printer_by_name(qr_printer_name: str, available_printers: list) -> Optional[str]:
+    """QRコードのプリンター名から実際のWindowsプリンター名を検索"""
+    try:
+        logging.debug(f"find_printer_by_name: QR='{qr_printer_name}', 利用可能プリンタ数={len(available_printers)}")
+        
+        # 完全一致を試行
+        if qr_printer_name in available_printers:
+            logging.info(f"完全一致で発見: '{qr_printer_name}'")
+            return qr_printer_name
+        
+        # printers.yamlからマッピングを確認
+        try:
+            printer_config = load_printer_config()
+            logging.debug(f"printers.yamlからマッピング確認中...")
+            for campus_key, campus_config in printer_config.items():
+                config_printer_name = campus_config.get("printer_name", "")
+                if config_printer_name == qr_printer_name:
+                    # 設定ファイルのプリンター名と一致する場合、実際のプリンター名を検索
+                    # 部分一致で検索（設定ファイルの名前が含まれるプリンターを探す）
+                    logging.debug(f"printers.yamlで一致: campus_key='{campus_key}', config_printer_name='{config_printer_name}'")
+                    for printer in available_printers:
+                        if config_printer_name in printer or printer in config_printer_name:
+                            logging.info(f"プリンター名マッピング: '{qr_printer_name}' -> '{printer}'")
+                            return printer
+        except Exception as e:
+            logging.debug(f"プリンター設定ファイル読み込みエラー（無視）: {e}")
+        
+        # 部分一致で検索（QRコードの名前が含まれるプリンターを探す）
+        logging.debug(f"部分一致で検索中...")
+        for printer in available_printers:
+            if qr_printer_name in printer or printer in qr_printer_name:
+                logging.info(f"プリンター名部分一致: '{qr_printer_name}' -> '{printer}'")
+                return printer
+        
+        # 逆方向の部分一致（実際のプリンター名にQRコードの名前が含まれる場合）
+        for printer in available_printers:
+            if qr_printer_name in printer:
+                logging.info(f"プリンター名部分一致（逆）: '{qr_printer_name}' -> '{printer}'")
+                return printer
+        
+        logging.warning(f"プリンター名が見つかりませんでした: '{qr_printer_name}'")
+        logging.debug(f"利用可能なプリンタ: {available_printers}")
+        return None
+    except Exception as e:
+        logging.error(f"find_printer_by_name エラー: {e}")
+        return None
 
 # PDF→画像変換設定
 POPPLER_PATH = os.environ.get("POPPLER_PATH", None)
@@ -101,14 +177,26 @@ processing_files = set()
 # ==========================
 # ログ設定
 # ==========================
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s",
-    handlers=[
-        logging.StreamHandler(),
-        logging.FileHandler("scan_printer_yotsuya.log", encoding="utf-8")
-    ],
-)
+# ルートロガーを設定
+root_logger = logging.getLogger()
+root_logger.setLevel(logging.INFO)
+
+# 既存のハンドラーをクリア
+root_logger.handlers.clear()
+
+# コンソールハンドラー（必ず表示されるように）
+console_handler = logging.StreamHandler()
+console_handler.setLevel(logging.INFO)
+console_formatter = logging.Formatter("%(asctime)s [%(levelname)s] %(message)s", datefmt="%Y-%m-%d %H:%M:%S")
+console_handler.setFormatter(console_formatter)
+root_logger.addHandler(console_handler)
+
+# ファイルハンドラー
+file_handler = logging.FileHandler("scan_printer_yotsuya.log", encoding="utf-8")
+file_handler.setLevel(logging.INFO)
+file_formatter = logging.Formatter("%(asctime)s [%(levelname)s] %(message)s", datefmt="%Y-%m-%d %H:%M:%S")
+file_handler.setFormatter(file_formatter)
+root_logger.addHandler(file_handler)
 
 
 # ==========================
@@ -459,10 +547,45 @@ def print_pdf(pdf_path: Path, printer_name: str, copies: int = 1) -> bool:
         printers_network = [printer[2] for printer in win32print.EnumPrinters(win32print.PRINTER_ENUM_NETWORK)]
         all_printers = printers + printers_network
         
-        if printer_name not in all_printers:
-            logging.error(f"プリンタが見つかりません: {printer_name}")
-            logging.info(f"利用可能なプリンタ: {all_printers}")
-            return False
+        # QRコードのプリンター名を実際のWindowsプリンター名にマッピング
+        original_printer_name = printer_name
+        logging.info(f"プリンター名解決開始: QRコード='{original_printer_name}', 利用可能なプリンタ数={len(all_printers)}")
+        logging.info(f"利用可能なプリンタ一覧: {all_printers}")
+        try:
+            actual_printer_name = find_printer_by_name(printer_name, all_printers)
+            if actual_printer_name:
+                logging.info(f"プリンター名を解決: '{original_printer_name}' -> '{actual_printer_name}'")
+                printer_name = actual_printer_name
+                # 解決後のプリンター名が実際に存在するか再確認
+                if printer_name not in all_printers:
+                    logging.error(f"解決後のプリンター名が利用可能なプリンタに存在しません: '{printer_name}'")
+                    logging.error(f"利用可能なプリンタ: {all_printers}")
+                    return False
+            else:
+                # find_printer_by_nameがNoneを返した場合
+                logging.warning(f"find_printer_by_nameがNoneを返しました: '{printer_name}'")
+                if printer_name not in all_printers:
+                    logging.error(f"プリンタが見つかりません: {printer_name}")
+                    logging.error(f"利用可能なプリンタ: {all_printers}")
+                    # 部分一致で再試行
+                    logging.info(f"部分一致で再検索中...")
+                    found = False
+                    for printer in all_printers:
+                        if printer_name in printer or printer in printer_name:
+                            logging.info(f"部分一致で発見: '{printer_name}' -> '{printer}'")
+                            printer_name = printer
+                            found = True
+                            break
+                    if not found:
+                        logging.error(f"部分一致でも見つかりませんでした: '{printer_name}'")
+                        return False
+        except Exception as e:
+            logging.warning(f"プリンター名解決エラー: {e}。元のプリンター名 '{printer_name}' を使用します")
+            # エラーが発生した場合、元のプリンター名で続行を試みる
+            if printer_name not in all_printers:
+                logging.error(f"プリンタが見つかりません: {printer_name}")
+                logging.info(f"利用可能なプリンタ: {all_printers}")
+                return False
         
         # ネットワークパス（UNCパス）の場合は一時的にローカルにコピー
         temp_pdf_path = None
@@ -483,7 +606,7 @@ def print_pdf(pdf_path: Path, printer_name: str, copies: int = 1) -> bool:
             
             logging.info(f"印刷を試行中: {abs_path} -> {printer_name}")
             
-            # 方法1: Adobe Readerのコマンドラインオプションを使用（横向き指定）
+            # Adobe Readerのコマンドラインオプションを使用
             # Adobe Readerのパスを検索
             acrobat_paths = [
                 r"C:\Program Files\Adobe\Acrobat DC\Acrobat\Acrobat.exe",
@@ -533,18 +656,26 @@ def print_pdf(pdf_path: Path, printer_name: str, copies: int = 1) -> bool:
                     
                     # 設定変更なしで印刷（プリンターのデフォルト設定を使用）
                     
-                    # Adobe Readerで印刷（/h オプションで非表示、/t でダイアログなし）
+                    # Adobe Readerで印刷（/t でダイアログなし）
                     # 注意: /t オプションでは、Adobe Readerの保存された設定が使用される可能性がある
                     # そのため、Adobe Reader側で「1ページ/枚」に設定する必要がある
+                    logging.info(f"Adobe Reader印刷コマンド実行: ファイル='{abs_path}', プリンター='{printer_name}'")
+                    logging.info(f"利用可能なプリンタリスト: {all_printers}")
+                    if printer_name not in all_printers:
+                        logging.error(f"警告: プリンター名 '{printer_name}' が利用可能なプリンタリストに存在しません")
+                        logging.error(f"利用可能なプリンタ: {all_printers}")
+                        return False
+                    
                     result = win32api.ShellExecute(
                         0,
                         "open",
                         acrobat_path,
-                        f'/h /t "{abs_path}" "{printer_name}"',
+                        f'/t "{abs_path}" "{printer_name}"',
                         str(Path(abs_path).parent),
                         0
                     )
                     
+                    logging.info(f"ShellExecute戻り値: {result}")
                     if result > 32:
                         logging.info(f"印刷ジョブを投入しました（Adobe Reader経由）: {pdf_path.name} -> {printer_name}")
                         if temp_pdf_path:
@@ -560,108 +691,66 @@ def print_pdf(pdf_path: Path, printer_name: str, copies: int = 1) -> bool:
                             threading.Thread(target=delete_temp_file, daemon=True).start()
                         return True
                     else:
+                        logging.error(f"ShellExecute失敗: 戻り値={result}")
                         raise Exception(f"Adobe Reader ShellExecute returned {result}")
                 except Exception as acrobat_error:
                     logging.warning(f"Adobe Readerでの印刷に失敗: {acrobat_error}")
-                    logging.info("通常の方法にフォールバックします...")
-            
-            # 方法2: printtoコマンドを使用（プリンター設定を事前に変更）
-            # プリンターをA4・横向き・部数1に設定
-            # 注意: プリンター設定の変更は、印刷ジョブを送信する直前に実行する必要がある
-            original_orientation = None
-            original_paper_size = None
-            original_copies = None
-            printer_handle = None
-            
-            # 注意: SetPrinterはアクセス権限が必要なため、設定変更をスキップ
-            # プリンターのデフォルト設定を使用する
-            logging.info("プリンター設定の変更をスキップします（デフォルト設定を使用）")
-            
-            try:
-                result = win32api.ShellExecute(
-                    0,
-                    "printto",
-                    abs_path,
-                    f'"{printer_name}"',
-                    str(Path(abs_path).parent),
-                    0
-                )
-                
-                # ShellExecuteは成功時に32以上の値を返す
-                if result > 32:
-                    logging.info(f"印刷ジョブを投入しました: {pdf_path.name} -> {printer_name} (部数: {copies})")
-                    # 一時ファイルは印刷キューに送信後、少し待ってから削除
-                    if temp_pdf_path:
-                        import threading
-                        def delete_temp_file():
-                            time.sleep(10)  # 10秒待ってから削除
-                            try:
-                                if temp_pdf_path.exists():
-                                    temp_pdf_path.unlink()
-                                    logging.info(f"一時ファイルを削除: {temp_pdf_path}")
-                            except Exception as e:
-                                logging.warning(f"一時ファイル削除エラー: {e}")
-                        threading.Thread(target=delete_temp_file, daemon=True).start()
-                    return True
-                else:
-                    logging.warning(f"ShellExecuteの戻り値: {result}")
-                    raise Exception(f"ShellExecute returned {result}")
+                    logging.info("デフォルトプリンタを一時的に変更する方法にフォールバックします...")
                     
-            except Exception as e1:
-                logging.warning(f"printtoでの印刷に失敗: {e1}")
-                logging.info("代替方法を試行中...")
-                
-                # 方法2: デフォルトプリンタを一時的に変更して印刷
-                try:
-                    # 現在のデフォルトプリンタを取得
-                    default_printer = win32print.GetDefaultPrinter()
-                    logging.info(f"現在のデフォルトプリンタ: {default_printer}")
-                    
-                    # 一時的にデフォルトプリンタを変更
-                    win32print.SetDefaultPrinter(printer_name)
-                    logging.info(f"デフォルトプリンタを変更: {printer_name}")
-                    
-                    # PDFを印刷（デフォルトプリンタに送信）
-                    result = win32api.ShellExecute(
-                        0,
-                        "print",
-                        abs_path,
-                        None,  # デフォルトプリンタを使用
-                        str(Path(abs_path).parent),
-                        0
-                    )
-                    
-                    # 元のデフォルトプリンタに戻す
-                    win32print.SetDefaultPrinter(default_printer)
-                    
-                    if result > 32:
-                        logging.info(f"印刷ジョブを投入しました: {pdf_path.name} -> {printer_name} (部数: {copies})")
-                        # 一時ファイルを削除
-                        if temp_pdf_path:
-                            import threading
-                            def delete_temp_file():
-                                time.sleep(10)
-                                try:
-                                    if temp_pdf_path.exists():
-                                        temp_pdf_path.unlink()
-                                        logging.info(f"一時ファイルを削除: {temp_pdf_path}")
-                                except Exception as e:
-                                    logging.warning(f"一時ファイル削除エラー: {e}")
-                            threading.Thread(target=delete_temp_file, daemon=True).start()
-                        return True
-                    else:
-                        logging.error(f"印刷に失敗しました。ShellExecute戻り値: {result}")
-                        return False
-                        
-                except Exception as e2:
-                    logging.exception(f"代替方法での印刷も失敗: {e2}")
-                    # 元のデフォルトプリンタに戻す（念のため）
+                    # 方法3: デフォルトプリンタを一時的に変更して印刷（最後の手段）
                     try:
-                        if 'default_printer' in locals():
-                            win32print.SetDefaultPrinter(default_printer)
-                    except:
-                        pass
-                    return False
+                        # 現在のデフォルトプリンタを取得
+                        default_printer = win32print.GetDefaultPrinter()
+                        logging.info(f"現在のデフォルトプリンタ: {default_printer}")
+                        
+                        # 一時的にデフォルトプリンタを変更
+                        win32print.SetDefaultPrinter(printer_name)
+                        logging.info(f"デフォルトプリンタを変更: {printer_name}")
+                        
+                        # PDFを印刷（デフォルトプリンタに送信）
+                        result = win32api.ShellExecute(
+                            0,
+                            "print",
+                            abs_path,
+                            None,  # デフォルトプリンタを使用
+                            str(Path(abs_path).parent),
+                            0
+                        )
+                        
+                        # 元のデフォルトプリンタに戻す
+                        win32print.SetDefaultPrinter(default_printer)
+                        
+                        if result > 32:
+                            logging.info(f"印刷ジョブを投入しました: {pdf_path.name} -> {printer_name} (部数: {copies})")
+                            # 一時ファイルを削除
+                            if temp_pdf_path:
+                                import threading
+                                def delete_temp_file():
+                                    time.sleep(10)
+                                    try:
+                                        if temp_pdf_path.exists():
+                                            temp_pdf_path.unlink()
+                                            logging.info(f"一時ファイルを削除: {temp_pdf_path}")
+                                    except Exception as e:
+                                        logging.warning(f"一時ファイル削除エラー: {e}")
+                                threading.Thread(target=delete_temp_file, daemon=True).start()
+                            return True
+                        else:
+                            logging.error(f"印刷に失敗しました。ShellExecute戻り値: {result}")
+                            return False
+                            
+                    except Exception as e2:
+                        logging.exception(f"代替方法での印刷も失敗: {e2}")
+                        # 元のデフォルトプリンタに戻す（念のため）
+                        try:
+                            if 'default_printer' in locals():
+                                win32print.SetDefaultPrinter(default_printer)
+                        except:
+                            pass
+                        return False
+            else:
+                logging.error("Adobe Readerが見つかりません")
+                return False
                     
         finally:
             # プリンター設定を元に戻す（オプション：必要に応じてコメントアウト）
@@ -727,6 +816,7 @@ def log_print_result(
 
 def handle_pdf(pdf_path: Path) -> None:
     """PDF1つの処理：安定化待ち→QR読取→印刷→ログ記録"""
+    logging.info(f"handle_pdf呼び出し: {pdf_path} (存在: {pdf_path.exists()})")
     # 既に処理中のファイルはスキップ（二重処理防止）
     file_key = str(pdf_path)
     if file_key in processing_files:
@@ -738,6 +828,7 @@ def handle_pdf(pdf_path: Path) -> None:
     try:
         # ファイルがPDFか確認
         if pdf_path.suffix.lower() != ".pdf":
+            logging.warning(f"PDF以外のファイルをスキップ: {pdf_path}")
             return
         
         logging.info(f"PDF検出: {pdf_path}")
@@ -894,20 +985,42 @@ class PDFHandler(FileSystemEventHandler):
         if event.is_directory:
             return
         path = Path(event.src_path)
+        logging.info(f"ファイル検出イベント: {path} (拡張子: {path.suffix})")
         if path.suffix.lower() == ".pdf":
+            logging.info(f"PDFファイルを検出しました: {path}")
             # 処理は別スレッドで実行（非ブロッキング）
             import threading
             threading.Thread(target=self._handle_pdf_delayed, args=(path,), daemon=True).start()
+        else:
+            logging.debug(f"PDF以外のファイルをスキップ: {path}")
     
     def _handle_pdf_delayed(self, path: Path):
         """少し待ってから処理（ファイル作成完了を待つ）"""
+        logging.info(f"PDF処理を開始: {path}")
         time.sleep(0.3)
         handle_pdf(path)
+    
+    def on_modified(self, event):
+        """ファイル変更イベント（ネットワークドライブでon_createdが発火しない場合の対策）"""
+        if event.is_directory:
+            return
+        path = Path(event.src_path)
+        logging.info(f"ファイル変更イベント: {path} (拡張子: {path.suffix})")
+        if path.suffix.lower() == ".pdf":
+            # ファイルサイズが0でない場合のみ処理（作成中はスキップ）
+            try:
+                if path.exists() and path.stat().st_size > 0:
+                    logging.info(f"PDFファイル変更を検出しました: {path}")
+                    import threading
+                    threading.Thread(target=self._handle_pdf_delayed, args=(path,), daemon=True).start()
+            except Exception as e:
+                logging.debug(f"ファイル変更イベント処理エラー: {e}")
     
     def on_moved(self, event):
         if event.is_directory:
             return
         path = Path(event.dest_path)
+        logging.info(f"ファイル移動イベント: {path}")
         if path.suffix.lower() == ".pdf":
             import threading
             threading.Thread(target=self._handle_pdf_delayed, args=(path,), daemon=True).start()
@@ -1004,9 +1117,45 @@ def main():
         observer.start()
         logging.info("フォルダ監視を開始しました")
         
+        # 定期的なポーリング（ネットワークドライブ対策）
+        last_poll_time = time.time()
+        poll_interval = 2.0  # 2秒ごとにポーリング
+        
+        def poll_for_new_pdfs():
+            """フォルダ内のPDFファイルを定期的にチェック"""
+            try:
+                if not SCAN_DIR.exists():
+                    return
+                for pdf_file in SCAN_DIR.glob("*.pdf"):
+                    # 処理済みフォルダやエラーフォルダのファイルはスキップ
+                    if pdf_file.parent == PROCESSED_DIR or pdf_file.parent == ERROR_DIR:
+                        continue
+                    # 処理中のファイルはスキップ
+                    file_key = str(pdf_file)
+                    if file_key in processing_files:
+                        continue
+                    # ファイルサイズが0でない場合のみ処理
+                    try:
+                        if pdf_file.exists() and pdf_file.stat().st_size > 0:
+                            # ファイルの最終更新時刻をチェック（最近変更されたファイルのみ）
+                            mtime = pdf_file.stat().st_mtime
+                            if time.time() - mtime < 10:  # 10秒以内に変更されたファイル
+                                logging.info(f"ポーリングでPDFを検出: {pdf_file}")
+                                import threading
+                                threading.Thread(target=handle_pdf, args=(pdf_file,), daemon=True).start()
+                    except Exception as e:
+                        logging.debug(f"ポーリング処理エラー ({pdf_file}): {e}")
+            except Exception as e:
+                logging.debug(f"ポーリングエラー: {e}")
+        
         try:
             while True:
-                time.sleep(1)
+                current_time = time.time()
+                # 定期的にポーリング
+                if current_time - last_poll_time >= poll_interval:
+                    poll_for_new_pdfs()
+                    last_poll_time = current_time
+                time.sleep(0.5)  # 0.5秒ごとにチェック
         except KeyboardInterrupt:
             print("\n停止中...")
             logging.info("停止中...")
