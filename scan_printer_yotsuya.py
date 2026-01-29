@@ -627,9 +627,8 @@ def print_pdf(pdf_path: Path, printer_name: str, copies: int = 1) -> bool:
                 try:
                     logging.info(f"Adobe Readerを使用して印刷: {acrobat_path}")
                     
-                    # 注意: SetPrinterはアクセス権限が必要なため、設定変更をスキップ
-                    # プリンターのデフォルト設定を使用して印刷
-                    # 設定を確認するだけ（変更はしない）
+                    # 印刷前にNup設定を強制的に1に設定
+                    original_nup_values = {}
                     try:
                         printer_handle = win32print.OpenPrinter(printer_name)
                         try:
@@ -638,27 +637,68 @@ def print_pdf(pdf_path: Path, printer_name: str, copies: int = 1) -> bool:
                                 devmode = printer_info['pDevMode']
                                 logging.info(f"プリンター設定（現在）: PaperSize={devmode.PaperSize}, Orientation={devmode.Orientation}, Copies={devmode.Copies}")
                                 
-                                # リコーApeos C7070固有の設定を確認（Nup設定の確認のみ、変更はしない）
+                                # リコーApeos C7070固有のNup設定を確認し、強制的に1に設定
                                 devmode_attrs = dir(devmode)
-                                for attr_name in ['PagesPerSheet', 'PagesPerSheetN', 'Nup', 'NupOrientOrder', 'PagesPerSheetNup']:
+                                nup_attrs = ['PagesPerSheet', 'PagesPerSheetN', 'Nup', 'NupOrientOrder', 'PagesPerSheetNup']
+                                
+                                needs_update = False
+                                for attr_name in nup_attrs:
                                     if attr_name in devmode_attrs:
                                         try:
                                             current_value = getattr(devmode, attr_name)
                                             logging.info(f"リコーApeos C7070: {attr_name} = {current_value} (現在の設定)")
+                                            
+                                            # 1以外の場合は1に強制設定が必要
                                             if current_value != 1:
-                                                logging.warning(f"リコーApeos C7070: {attr_name} が {current_value} になっています。手動で1に設定してください。")
-                                        except Exception:
-                                            pass
+                                                # 元の値を保存
+                                                original_nup_values[attr_name] = current_value
+                                                setattr(devmode, attr_name, 1)
+                                                logging.info(f"リコーApeos C7070: {attr_name} を {current_value} -> 1 に変更します")
+                                                needs_update = True
+                                        except Exception as e:
+                                            logging.debug(f"{attr_name} の設定をスキップ: {e}")
+                                
+                                # 設定変更が必要な場合のみSetPrinterで保存を試行
+                                # ただし、権限不足の場合はスキップして印刷を継続
+                                if needs_update:
+                                    try:
+                                        # printer_infoのpDevModeを更新
+                                        printer_info['pDevMode'] = devmode
+                                        # SetPrinterで設定を保存
+                                        win32print.SetPrinter(printer_handle, 2, printer_info, 0)
+                                        logging.info(f"Nup設定を1に強制設定しました: {printer_name}")
+                                    except Exception as e:
+                                        error_code = e.args[0] if e.args else None
+                                        if error_code == 5:  # アクセス拒否
+                                            logging.info(f"SetPrinter権限不足（エラー5）: プリンター設定の変更をスキップして印刷を継続します")
+                                            logging.info(f"プリンター '{printer_name}' のNup設定は現在のまま（{original_nup_values}）で印刷されます")
+                                            # SetPrinterが失敗した場合、devmodeの変更を元に戻す（メモリ上の変更をクリア）
+                                            for attr_name, original_value in original_nup_values.items():
+                                                try:
+                                                    setattr(devmode, attr_name, original_value)
+                                                    logging.debug(f"{attr_name} を元の値 {original_value} に戻しました")
+                                                except Exception:
+                                                    pass
+                                        else:
+                                            logging.warning(f"SetPrinterで設定を保存できませんでした: {e}")
+                                            logging.warning(f"プリンター '{printer_name}' の設定を手動で1ページ/枚に設定してください")
+                                            # SetPrinterが失敗した場合、devmodeの変更を元に戻す
+                                            for attr_name, original_value in original_nup_values.items():
+                                                try:
+                                                    setattr(devmode, attr_name, original_value)
+                                                    logging.debug(f"{attr_name} を元の値 {original_value} に戻しました")
+                                                except Exception:
+                                                    pass
+                                else:
+                                    logging.info(f"プリンター '{printer_name}' のNup設定は既に1です（変更不要）")
                         finally:
                             win32print.ClosePrinter(printer_handle)
                     except Exception as e:
-                        logging.info(f"プリンター設定の確認をスキップしました: {e}")
+                        logging.warning(f"プリンター設定の変更をスキップしました: {e}")
+                        logging.warning(f"プリンター '{printer_name}' の設定を手動で1ページ/枚に設定してください")
                     
-                    # 設定変更なしで印刷（プリンターのデフォルト設定を使用）
-                    
+                    # Nup設定を1に強制設定した状態で印刷
                     # Adobe Readerで印刷（/t でダイアログなし）
-                    # 注意: /t オプションでは、Adobe Readerの保存された設定が使用される可能性がある
-                    # そのため、Adobe Reader側で「1ページ/枚」に設定する必要がある
                     logging.info(f"Adobe Reader印刷コマンド実行: ファイル='{abs_path}', プリンター='{printer_name}'")
                     logging.info(f"利用可能なプリンタリスト: {all_printers}")
                     if printer_name not in all_printers:
