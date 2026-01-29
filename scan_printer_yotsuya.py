@@ -4,6 +4,7 @@
 """
 
 import os
+import subprocess
 import csv
 import shutil
 import time
@@ -80,6 +81,9 @@ else:
 
 # 印刷対象PDFの中央リポジトリ（オプション）
 PRINT_MATERIALS_ROOT = None  # Path(r"\\server\print_materials")  # 必要に応じて設定
+
+# SumatraPDF（正式インストール先を優先）
+SUMATRA_PATH = r"C:\Program Files\SumatraPDF\SumatraPDF.exe"
 
 # ログファイル
 LOG_CSV = Path("print_log_yotsuya.csv")
@@ -606,26 +610,34 @@ def print_pdf(pdf_path: Path, printer_name: str, copies: int = 1) -> bool:
             
             logging.info(f"印刷を試行中: {abs_path} -> {printer_name}")
             
-            # Adobe Readerのコマンドラインオプションを使用
-            # Adobe Readerのパスを検索
+            # 印刷に使うアプリを検索（SumatraPDF優先、なければAdobe Reader）
+            sumatra_paths = [
+                SUMATRA_PATH,
+                os.path.join(os.environ.get("LOCALAPPDATA", ""), "SumatraPDF", "SumatraPDF.exe"),
+                r"C:\Program Files (x86)\SumatraPDF\SumatraPDF.exe",
+            ]
+            sumatra_path = None
+            for path in sumatra_paths:
+                if path and Path(path).exists():
+                    sumatra_path = path
+                    break
+            
             acrobat_paths = [
                 r"C:\Program Files\Adobe\Acrobat DC\Acrobat\Acrobat.exe",
                 r"C:\Program Files (x86)\Adobe\Acrobat Reader DC\Reader\AcroRd32.exe",
                 r"C:\Program Files\Adobe\Acrobat Reader DC\Reader\AcroRd32.exe",
                 r"C:\Program Files (x86)\Adobe\Acrobat Reader DC\Reader\AcroRd32.exe",
             ]
-            
             acrobat_path = None
             for path in acrobat_paths:
                 if Path(path).exists():
                     acrobat_path = path
                     break
             
-            # Adobe Readerが見つかった場合は、コマンドラインで印刷を試行
-            # リコーApeos C7070の場合、プリンター設定を事前に変更する必要がある
-            if acrobat_path:
+            # SumatraPDFを優先して印刷（指定プリンターに確実に送りやすい）
+            if sumatra_path:
                 try:
-                    logging.info(f"Adobe Readerを使用して印刷: {acrobat_path}")
+                    logging.info(f"SumatraPDFを使用して印刷: {sumatra_path}")
                     
                     # 印刷前にNup設定を強制的に1に設定
                     original_nup_values = {}
@@ -698,26 +710,55 @@ def print_pdf(pdf_path: Path, printer_name: str, copies: int = 1) -> bool:
                         logging.warning(f"プリンター '{printer_name}' の設定を手動で1ページ/枚に設定してください")
                     
                     # Nup設定を1に強制設定した状態で印刷
-                    # Adobe Readerで印刷（/t でダイアログなし）
-                    logging.info(f"Adobe Reader印刷コマンド実行: ファイル='{abs_path}', プリンター='{printer_name}'")
+                    # SumatraPDFで印刷（-print-to で指定プリンターに直接送信）
+                    logging.info(f"SumatraPDF印刷コマンド実行: ファイル='{abs_path}', プリンター='{printer_name}'")
                     logging.info(f"利用可能なプリンタリスト: {all_printers}")
                     if printer_name not in all_printers:
                         logging.error(f"警告: プリンター名 '{printer_name}' が利用可能なプリンタリストに存在しません")
                         logging.error(f"利用可能なプリンタ: {all_printers}")
                         return False
                     
-                    result = win32api.ShellExecute(
-                        0,
-                        "open",
-                        acrobat_path,
-                        f'/t "{abs_path}" "{printer_name}"',
-                        str(Path(abs_path).parent),
-                        0
-                    )
-                    
-                    logging.info(f"ShellExecute戻り値: {result}")
-                    if result > 32:
-                        logging.info(f"印刷ジョブを投入しました（Adobe Reader経由）: {pdf_path.name} -> {printer_name}")
+                    # subprocessで起動（ShellExecuteはAppData配下でアクセス拒否になることがあるため）
+                    # -print-settings "simplex,monochrome,fit": 片面・グレースケール・用紙に収める（校舎差・ドライバ既定を無視）
+                    sumatra_ok = False
+                    try:
+                        creationflags = subprocess.CREATE_NO_WINDOW if hasattr(subprocess, "CREATE_NO_WINDOW") else 0
+                        proc = subprocess.run(
+                            [sumatra_path, "-print-to", printer_name, "-print-settings", "simplex,monochrome,fit", abs_path, "-silent"],
+                            cwd=str(Path(abs_path).parent),
+                            capture_output=True,
+                            timeout=60,
+                            creationflags=creationflags,
+                        )
+                        logging.info(f"SumatraPDF 終了コード: {proc.returncode}")
+                        if proc.returncode == 0:
+                            logging.info(f"印刷ジョブを投入しました（SumatraPDF経由）: {pdf_path.name} -> {printer_name}")
+                            sumatra_ok = True
+                        else:
+                            if proc.stderr:
+                                logging.warning(f"SumatraPDF stderr: {proc.stderr.decode(errors='replace')}")
+                            raise Exception(f"SumatraPDF returned {proc.returncode}")
+                    except subprocess.TimeoutExpired:
+                        logging.warning("SumatraPDFがタイムアウトしました（印刷は送信済みの可能性あり）")
+                        sumatra_ok = True
+                    except OSError as e:
+                        # WinError 193 = 32bit Python から 64bit exe を起動した場合など
+                        if getattr(e, "winerror", None) == 193:
+                            logging.warning("WinError 193: 32bit Python と 64bit SumatraPDF の組み合わせの可能性があります。ShellExecuteで再試行します。")
+                            result = win32api.ShellExecute(
+                                0, "open", sumatra_path,
+                                f'-print-to "{printer_name}" -print-settings "simplex,monochrome,fit" "{abs_path}" -silent',
+                                str(Path(abs_path).parent), 0
+                            )
+                            if result > 32:
+                                logging.info(f"印刷ジョブを投入しました（SumatraPDF経由・ShellExecute）: {pdf_path.name} -> {printer_name}")
+                                sumatra_ok = True
+                            else:
+                                logging.warning(f"ShellExecuteも失敗: 戻り値={result}")
+                                raise Exception(f"SumatraPDF ShellExecute returned {result}")
+                        else:
+                            raise
+                    if sumatra_ok:
                         if temp_pdf_path:
                             import threading
                             def delete_temp_file():
@@ -730,11 +771,8 @@ def print_pdf(pdf_path: Path, printer_name: str, copies: int = 1) -> bool:
                                     logging.warning(f"一時ファイル削除エラー: {e}")
                             threading.Thread(target=delete_temp_file, daemon=True).start()
                         return True
-                    else:
-                        logging.error(f"ShellExecute失敗: 戻り値={result}")
-                        raise Exception(f"Adobe Reader ShellExecute returned {result}")
-                except Exception as acrobat_error:
-                    logging.warning(f"Adobe Readerでの印刷に失敗: {acrobat_error}")
+                except Exception as sumatra_error:
+                    logging.warning(f"SumatraPDFでの印刷に失敗: {sumatra_error}")
                     logging.info("デフォルトプリンタを一時的に変更する方法にフォールバックします...")
                     
                     # 方法3: デフォルトプリンタを一時的に変更して印刷（最後の手段）
@@ -788,8 +826,68 @@ def print_pdf(pdf_path: Path, printer_name: str, copies: int = 1) -> bool:
                         except:
                             pass
                         return False
+            elif acrobat_path:
+                # SumatraPDFが無い場合のフォールバック: Adobe Readerで印刷
+                logging.info("SumatraPDFが見つからないためAdobe Readerを使用します")
+                try:
+                    logging.info(f"Adobe Readerを使用して印刷: {acrobat_path}")
+                    if printer_name not in all_printers:
+                        logging.error(f"警告: プリンター名 '{printer_name}' が利用可能なプリンタリストに存在しません")
+                        return False
+                    result = win32api.ShellExecute(
+                        0, "open", acrobat_path,
+                        f'/t "{abs_path}" "{printer_name}"',
+                        str(Path(abs_path).parent), 0
+                    )
+                    if result > 32:
+                        logging.info(f"印刷ジョブを投入しました（Adobe Reader経由）: {pdf_path.name} -> {printer_name}")
+                        if temp_pdf_path:
+                            import threading
+                            def delete_temp_file():
+                                time.sleep(10)
+                                try:
+                                    if temp_pdf_path.exists():
+                                        temp_pdf_path.unlink()
+                                        logging.info(f"一時ファイルを削除: {temp_pdf_path}")
+                                except Exception as e:
+                                    logging.warning(f"一時ファイル削除エラー: {e}")
+                            threading.Thread(target=delete_temp_file, daemon=True).start()
+                        return True
+                    else:
+                        raise Exception(f"Adobe Reader ShellExecute returned {result}")
+                except Exception as acrobat_error:
+                    logging.warning(f"Adobe Readerでの印刷に失敗: {acrobat_error}")
+                    logging.info("デフォルトプリンタを一時的に変更する方法にフォールバックします...")
+                    try:
+                        default_printer = win32print.GetDefaultPrinter()
+                        win32print.SetDefaultPrinter(printer_name)
+                        result = win32api.ShellExecute(0, "print", abs_path, None, str(Path(abs_path).parent), 0)
+                        win32print.SetDefaultPrinter(default_printer)
+                        if result > 32:
+                            logging.info(f"印刷ジョブを投入しました（デフォルト変更）: {pdf_path.name} -> {printer_name}")
+                            if temp_pdf_path:
+                                import threading
+                                def delete_temp_file():
+                                    time.sleep(10)
+                                    try:
+                                        if temp_pdf_path.exists():
+                                            temp_pdf_path.unlink()
+                                            logging.info(f"一時ファイルを削除: {temp_pdf_path}")
+                                    except Exception as e:
+                                        logging.warning(f"一時ファイル削除エラー: {e}")
+                                threading.Thread(target=delete_temp_file, daemon=True).start()
+                            return True
+                        return False
+                    except Exception as e2:
+                        logging.exception(f"代替方法での印刷も失敗: {e2}")
+                        try:
+                            if 'default_printer' in locals():
+                                win32print.SetDefaultPrinter(default_printer)
+                        except Exception:
+                            pass
+                        return False
             else:
-                logging.error("Adobe Readerが見つかりません")
+                logging.error("SumatraPDFもAdobe Readerも見つかりません。SumatraPDFのインストールを推奨します。")
                 return False
                     
         finally:
@@ -950,18 +1048,9 @@ def handle_pdf(pdf_path: Path) -> None:
         
         if print_success:
             # 成功時、processedフォルダへ移動
-            PROCESSED_DIR.mkdir(parents=True, exist_ok=True)
-            processed_file = PROCESSED_DIR / pdf_path.name
-            
-            # 同名ファイルがある場合はタイムスタンプを追加
-            if processed_file.exists():
-                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                stem = processed_file.stem
-                suffix = processed_file.suffix
-                processed_file = PROCESSED_DIR / f"{stem}_{timestamp}{suffix}"
-            
-            try:
-                shutil.move(str(pdf_path), str(processed_file))
+            # 移動元が既に無い場合は「他スレッドで移動済み」として処理完了扱い、異常終了にしない
+            if not pdf_path.exists():
+                logging.info(f"移動元ファイルが既に存在しません（他スレッドで移動済みの可能性）: {pdf_path.name}。処理完了扱いとします。")
                 log_print_result(
                     scan_file=pdf_path.name,
                     print_id=print_id or "unknown",
@@ -970,8 +1059,37 @@ def handle_pdf(pdf_path: Path) -> None:
                     error_message=""
                 )
                 logging.info(f"処理完了: {pdf_path.name} -> {original_filename} (PRINT_ID: {print_id or 'N/A'})")
-            except Exception as e:
-                logging.error(f"processedフォルダへの移動エラー: {e}")
+            else:
+                PROCESSED_DIR.mkdir(parents=True, exist_ok=True)
+                processed_file = PROCESSED_DIR / pdf_path.name
+                # 同名ファイルがある場合はタイムスタンプを追加
+                if processed_file.exists():
+                    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                    stem = processed_file.stem
+                    suffix = processed_file.suffix
+                    processed_file = PROCESSED_DIR / f"{stem}_{timestamp}{suffix}"
+                try:
+                    shutil.move(str(pdf_path), str(processed_file))
+                    log_print_result(
+                        scan_file=pdf_path.name,
+                        print_id=print_id or "unknown",
+                        printer=printer_name,
+                        result="success",
+                        error_message=""
+                    )
+                    logging.info(f"処理完了: {pdf_path.name} -> {original_filename} (PRINT_ID: {print_id or 'N/A'})")
+                except FileNotFoundError:
+                    logging.info(f"移動元が移動中に削除されました: {pdf_path.name}。処理完了扱いとします。")
+                    log_print_result(
+                        scan_file=pdf_path.name,
+                        print_id=print_id or "unknown",
+                        printer=printer_name,
+                        result="success",
+                        error_message=""
+                    )
+                    logging.info(f"処理完了: {pdf_path.name} -> {original_filename} (PRINT_ID: {print_id or 'N/A'})")
+                except Exception as e:
+                    logging.error(f"processedフォルダへの移動エラー: {e}")
         else:
             # 印刷失敗時、errorフォルダへ
             ERROR_DIR.mkdir(parents=True, exist_ok=True)
