@@ -51,7 +51,7 @@ def get_current_user():
 
 
 def load_users():
-    """ユーザー情報を読み込む"""
+    """ユーザー情報を読み込む（パスワードハッシュと管理者フラグ）"""
     users = {}
     if os.path.exists(USERS_FILE):
         try:
@@ -60,12 +60,19 @@ def load_users():
                 for row in reader:
                     # ヘッダー行が存在し、必要なキーがあることを確認
                     if "username" in row and "password_hash" in row:
-                        users[row["username"]] = row["password_hash"]
+                        is_admin = row.get("is_admin", "0").strip() == "1"
+                        users[row["username"]] = {
+                            "password_hash": row["password_hash"],
+                            "is_admin": is_admin
+                        }
                     elif len(row) >= 2:
                         # ヘッダー行がない場合のフォールバック（最初の列がusername、2番目がpassword_hash）
                         keys = list(row.keys())
                         if len(keys) >= 2:
-                            users[row[keys[0]]] = row[keys[1]]
+                            users[row[keys[0]]] = {
+                                "password_hash": row[keys[1]],
+                                "is_admin": False
+                            }
         except Exception as e:
             import traceback
             print(f"ERROR: ユーザーファイル読み込みエラー: {e}")
@@ -73,18 +80,19 @@ def load_users():
     return users
 
 
-def save_user(username, password_hash):
+def save_user(username, password_hash, is_admin=False):
     """ユーザー情報を保存"""
     users = load_users()
-    users[username] = password_hash
+    users[username] = {
+        "password_hash": password_hash,
+        "is_admin": is_admin
+    }
     
-    file_exists = os.path.exists(USERS_FILE)
     with open(USERS_FILE, "w", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
-        if not file_exists:
-            writer.writerow(["username", "password_hash"])
-        for user, pwd_hash in users.items():
-            writer.writerow([user, pwd_hash])
+        writer.writerow(["username", "password_hash", "is_admin"])
+        for user, data in users.items():
+            writer.writerow([user, data["password_hash"], "1" if data["is_admin"] else "0"])
 
 
 def login_required(f):
@@ -95,6 +103,31 @@ def login_required(f):
             return redirect(url_for("login"))
         return f(*args, **kwargs)
     return decorated_function
+
+
+def admin_required(f):
+    """管理者権限必須デコレータ"""
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        if "username" not in session:
+            return redirect(url_for("login"))
+        
+        username = session.get("username")
+        users = load_users()
+        if username not in users or not users[username]["is_admin"]:
+            flash("この機能を使用する権限がありません", "error")
+            return redirect(url_for("index"))
+        return f(*args, **kwargs)
+    return decorated_function
+
+
+def is_current_user_admin():
+    """現在のユーザーが管理者かどうかを確認"""
+    username = session.get("username")
+    if not username:
+        return False
+    users = load_users()
+    return username in users and users[username]["is_admin"]
 
 
 def load_printer_config():
@@ -750,8 +783,9 @@ def login():
         password = request.form.get("password", "")
         
         users = load_users()
-        if username in users and check_password_hash(users[username], password):
+        if username in users and check_password_hash(users[username]["password_hash"], password):
             session["username"] = username
+            session["is_admin"] = users[username]["is_admin"]
             return redirect(url_for("index"))
         else:
             flash("ユーザー名またはパスワードが正しくありません", "error")
@@ -763,7 +797,43 @@ def login():
 def logout():
     """ログアウト"""
     session.pop("username", None)
+    session.pop("is_admin", None)
     return redirect(url_for("login"))
+
+
+@app.route("/users")
+@admin_required
+def user_management():
+    """ユーザー管理画面（管理者のみ）"""
+    users = load_users()
+    user_list = [{"username": u, "is_admin": data["is_admin"]} for u, data in users.items()]
+    return render_template("users.html", users=user_list)
+
+
+@app.route("/users/add", methods=["GET", "POST"])
+@admin_required
+def add_user():
+    """ユーザー追加画面（管理者のみ）"""
+    if request.method == "POST":
+        username = request.form.get("username", "").strip()
+        password = request.form.get("password", "")
+        is_admin = request.form.get("is_admin") == "1"
+        
+        if not username or not password:
+            flash("ユーザー名とパスワードを入力してください", "error")
+            return render_template("add_user.html")
+        
+        users = load_users()
+        if username in users:
+            flash("そのユーザー名は既に存在します", "error")
+            return render_template("add_user.html")
+        
+        password_hash = generate_password_hash(password)
+        save_user(username, password_hash, is_admin)
+        flash(f"ユーザー '{username}' を追加しました", "success")
+        return redirect(url_for("user_management"))
+    
+    return render_template("add_user.html")
 
 
 @app.route("/")
@@ -959,7 +1029,8 @@ def folder_view(folder_path=""):
         current_path=current_path_encoded,  # URL用（エンコード済み）
         current_path_display=current_path_display,  # 表示用（デコード済み）
         file_text_mappings=file_text_mappings,  # ファイルごとのテキスト対応情報
-        username=session.get("username", "unknown")
+        username=session.get("username", "unknown"),
+        is_admin=session.get("is_admin", False)
     )
 
 
@@ -1031,7 +1102,8 @@ def view(filename):
         image_urls=image_urls,
         students=students,
         selected_student_name=selected_student_name,
-        parent_folder_path=parent_folder_path
+        parent_folder_path=parent_folder_path,
+        is_admin=session.get("is_admin", False)
     )
 
 
@@ -1071,7 +1143,8 @@ def header_print():
         "header_print.html",
         username=user,
         campuses=campuses,
-        pdf_files=pdf_files
+        pdf_files=pdf_files,
+        is_admin=session.get("is_admin", False)
     )
 
 
@@ -1347,7 +1420,7 @@ def logs():
             log_entries = list(reader)
             log_entries.reverse()  # 新しい順に
     
-    return render_template("logs.html", logs=log_entries, username=session.get("username", "unknown"))
+    return render_template("logs.html", logs=log_entries, username=session.get("username", "unknown"), is_admin=session.get("is_admin", False))
 
 
 @app.route("/students", methods=["GET", "POST"])
@@ -1364,7 +1437,7 @@ def students():
         if not student_name:
             flash("生徒名を入力してください。", "error")
             students_list = load_students(username)
-            return render_template("students.html", students=students_list, username=username)
+            return render_template("students.html", students=students_list, username=username, is_admin=session.get("is_admin", False))
         
         students_list = load_students(username)
         
@@ -1404,7 +1477,7 @@ def students():
     
     # GETリクエストまたはPOST処理後の表示
     students_list = load_students(username)
-    return render_template("students.html", students=students_list, username=username)
+    return render_template("students.html", students=students_list, username=username, is_admin=session.get("is_admin", False))
 
 
 @app.route("/logo")
