@@ -271,8 +271,7 @@
       </div>
 
       <div class="form-section">
-        <button type="button" class="btn btn-primary" id="printBtn" onclick="printHeader()" disabled>頭紙を印刷（単一）</button>
-        <button type="button" class="btn btn-primary" id="batchPrintBtn" onclick="printBatch()" disabled>頭紙を一括印刷</button>
+        <button type="button" class="btn btn-primary" id="printBtn" onclick="printHeaders()" disabled>頭紙を印刷</button>
         <button type="button" class="btn btn-secondary" onclick="window.location.href='/'">キャンセル</button>
       </div>
     </form>
@@ -310,13 +309,10 @@
         }
       });
       
-      // 校舎とファイルが選択されたらボタンを有効化
+      // 校舎と1件以上ファイルが選択されたら印刷ボタンを有効化（単一/一括は選択数で自動判定）
       const campus = document.getElementById('campus').value;
-      const hasSingleFile = count === 1;
-      const hasMultipleFiles = count > 0;
-      
-      document.getElementById('printBtn').disabled = !(campus && hasSingleFile);
-      document.getElementById('batchPrintBtn').disabled = !(campus && hasMultipleFiles);
+      const hasSelection = count >= 1;
+      document.getElementById('printBtn').disabled = !(campus && hasSelection);
     }
 
     function selectAll() {
@@ -453,31 +449,7 @@
       }
     });
 
-    function printHeader() {
-      const campus = document.getElementById('campus').value;
-      const filePath = selectedFilePath;
-      
-      if (!campus || !filePath) {
-        alert('校舎とファイルを選択してください。');
-        return;
-      }
-      
-      // 頭紙のURLを生成（校舎情報を含む）
-      const encodedPath = encodeURIComponent(filePath);
-      const headerUrl = `/header/${encodedPath}?campus=${encodeURIComponent(campus)}`;
-      
-      // 新しいウィンドウで開いて印刷
-      const printWindow = window.open(headerUrl, '_blank');
-      if (printWindow) {
-        printWindow.onload = function() {
-          printWindow.print();
-        };
-      } else {
-        alert('ポップアップがブロックされています。ポップアップを許可してください。');
-      }
-    }
-
-    function printBatch() {
+    function printHeaders() {
       const campus = document.getElementById('campus').value;
       const checkboxes = document.querySelectorAll('.file-checkbox:checked');
       const selectedFiles = Array.from(checkboxes).map(cb => cb.getAttribute('data-file-path'));
@@ -487,7 +459,27 @@
         return;
       }
       
-      // 一括印刷用のエンドポイントに送信
+      if (selectedFiles.length === 1) {
+        // 単一: 頭紙1枚を開いて印刷
+        const encodedPath = encodeURIComponent(selectedFiles[0]);
+        const headerUrl = `/header/${encodedPath}?campus=${encodeURIComponent(campus)}`;
+        const printWindow = window.open(headerUrl, '_blank');
+        if (printWindow) {
+          printWindow.onload = function() {
+            printWindow.print();
+          };
+        } else {
+          alert('ポップアップがブロックされています。ポップアップを許可してください。');
+        }
+        return;
+      }
+      
+      // 複数: 一括印刷（クリック直後に窓を開いておくとポップアップブロックを避けられる）
+      const printWindow = window.open('about:blank', '_blank');
+      if (!printWindow) {
+        alert('ポップアップがブロックされています。ポップアップを許可してください。');
+        return;
+      }
       fetch('/headers-batch', {
         method: 'POST',
         headers: {
@@ -502,22 +494,16 @@
       .then(data => {
         if (data.error) {
           alert('エラー: ' + data.error);
+          printWindow.close();
           return;
         }
-        
-        // 新しいウィンドウで開いて印刷
-        const printWindow = window.open(data.url, '_blank');
-        if (printWindow) {
-          printWindow.onload = function() {
-            printWindow.print();
-          };
-        } else {
-          alert('ポップアップがブロックされています。ポップアップを許可してください。');
-        }
+        printWindow.location.href = data.url;
+        // header_batch.html の onload で自動的に window.print() が呼ばれる
       })
       .catch(error => {
         console.error('Error:', error);
         alert('一括印刷の実行中にエラーが発生しました。');
+        printWindow.close();
       });
     }
   </script>

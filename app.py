@@ -160,12 +160,52 @@ def generate_print_id():
     return f"QS_{year}_{unique_part}"
 
 
+# フォルダ名（パスの先頭）→ 頭紙PDFファイル名の対応（科目別頭紙）
+SUBJECT_HEADER_MAP = {
+    "算数": "QS算数頭紙.pdf",
+    "国語": "QS国語頭紙.pdf",
+    "社会": "QS社会頭紙.pdf",
+    "理科": "QS理科頭紙.pdf",
+}
+HEADER_TEMPLATES_DIR = os.path.join(BASE_DIR, "templates")
+
+
+def get_header_template_for_path(file_path):
+    """ファイルパス（例: 算数/6年/数の性質.pdf）から頭紙PDFファイル名を決定する。
+    パスの先頭セグメントが算数・国語・社会・理科のいずれかなら対応する頭紙を返す。
+    それ以外は従来の 頭紙.pdf を返す（存在しなければ科目別のいずれかを試す）。
+    """
+    path_normalized = (file_path or "").replace("\\", "/").strip("/")
+    if not path_normalized:
+        candidate = os.path.join(HEADER_TEMPLATES_DIR, "頭紙.pdf")
+        if os.path.exists(candidate):
+            return "頭紙.pdf"
+        for name in SUBJECT_HEADER_MAP.values():
+            if os.path.exists(os.path.join(HEADER_TEMPLATES_DIR, name)):
+                return name
+        return "頭紙.pdf"
+    first_segment = path_normalized.split("/")[0]
+    template_name = SUBJECT_HEADER_MAP.get(first_segment)
+    if template_name and os.path.exists(os.path.join(HEADER_TEMPLATES_DIR, template_name)):
+        return template_name
+    # フォールバック
+    fallback = os.path.join(HEADER_TEMPLATES_DIR, "頭紙.pdf")
+    if os.path.exists(fallback):
+        return "頭紙.pdf"
+    for name in SUBJECT_HEADER_MAP.values():
+        if os.path.exists(os.path.join(HEADER_TEMPLATES_DIR, name)):
+            return name
+    return template_name or "頭紙.pdf"
+
+
 def create_header_with_qr(filename, username, text_name, campus_name=None):
-    """頭紙PDFにQRコードを重ねて画像を生成"""
-    # 頭紙PDFのパス
-    header_template_path = os.path.join(BASE_DIR, "templates", "頭紙.pdf")
+    """頭紙PDFにQRコードを重ねて画像を生成。
+    選択したファイルのパス（フォルダ）に応じて科目別頭紙を自動選択する。
+    """
+    header_template_name = get_header_template_for_path(filename)
+    header_template_path = os.path.join(HEADER_TEMPLATES_DIR, header_template_name)
     if not os.path.exists(header_template_path):
-        raise FileNotFoundError("頭紙テンプレートが見つかりません")
+        raise FileNotFoundError(f"頭紙テンプレートが見つかりません: {header_template_name}")
     
     # 頭紙PDFを画像に変換（1ページのみ）
     header_images = convert_from_path(header_template_path, poppler_path=POPPLER_PATH, first_page=1, last_page=1)
