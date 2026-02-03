@@ -75,9 +75,9 @@ PDF_DIR_ENV = os.environ.get("PDF_DIR")
 if PDF_DIR_ENV:
     PDF_DIR = Path(PDF_DIR_ENV)
 else:
-    # app.pyと同じデフォルト値: Y:\算数科作業フォルダ\10分テスト\test_pdf
+    # app.pyと同じデフォルト値: Y:\算数科作業フォルダ\QS\test_pdf
     # ただし、test_pdfsフォルダもフォールバックとして検索対象に含める
-    PDF_DIR = Path(r"Y:\算数科作業フォルダ\10分テスト\test_pdf")
+    PDF_DIR = Path(r"Y:\算数科作業フォルダ\QS\test_pdf")
 
 # 印刷対象PDFの中央リポジトリ（オプション）
 PRINT_MATERIALS_ROOT = None  # Path(r"\\server\print_materials")  # 必要に応じて設定
