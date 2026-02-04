@@ -367,48 +367,6 @@
       color: #666;
       pointer-events: none;
     }
-    .search-results {
-      position: absolute;
-      background: white;
-      border: 1px solid #ddd;
-      border-radius: 4px;
-      box-shadow: 0 4px 6px rgba(0,0,0,0.1);
-      max-height: 400px;
-      overflow-y: auto;
-      z-index: 100;
-      width: 100%;
-      margin-top: 5px;
-      display: none;
-    }
-    .search-results.show {
-      display: block;
-    }
-    .search-result-item {
-      padding: 12px;
-      border-bottom: 1px solid #f0f0f0;
-      cursor: pointer;
-      transition: background 0.2s;
-    }
-    .search-result-item:hover {
-      background: #f5f5f5;
-    }
-    .search-result-item:last-child {
-      border-bottom: none;
-    }
-    .search-result-file-name {
-      font-weight: 600;
-      color: #0078d4;
-      margin-bottom: 4px;
-    }
-    .search-result-folder {
-      font-size: 12px;
-      color: #666;
-      margin-bottom: 4px;
-    }
-    .search-result-mapping {
-      font-size: 12px;
-      color: #888;
-    }
     /* 検索時に左側一覧で非表示にする項目 */
     .folder-list li.search-hidden,
     .file-list li.search-hidden {
@@ -450,9 +408,8 @@
         <div class="search-box-wrapper">
           <div class="search-box">
             <span class="search-icon">🔍</span>
-            <input type="text" class="search-input" id="searchInput" placeholder="ファイル検索" oninput="handleSearch()">
+            <input type="text" class="search-input" id="searchInput" placeholder="ファイル検索（左の一覧が絞り込まれます）" oninput="handleSearch()">
           </div>
-          <div class="search-results" id="searchResults"></div>
         </div>
       </div>
     {% endif %}
@@ -679,16 +636,12 @@
 
     function handleSearch() {
       const keyword = document.getElementById('searchInput').value.trim();
-      const resultsDiv = document.getElementById('searchResults');
       
-      // 入力が空の場合は結果を非表示し、左側一覧の絞り込みを解除
       if (!keyword) {
-        resultsDiv.classList.remove('show');
         removeSearchFilter();
         return;
       }
 
-      // デバウンス（入力が止まってから0.3秒後に検索）
       clearTimeout(searchTimeout);
       searchTimeout = setTimeout(() => {
         performSearch(keyword);
@@ -696,51 +649,18 @@
     }
 
     function performSearch(keyword) {
-      const resultsDiv = document.getElementById('searchResults');
-      resultsDiv.innerHTML = '検索中...';
-      resultsDiv.classList.add('show');
-
       const subject = getCurrentSubject();
       const url = `/api/search?subject=${encodeURIComponent(subject)}&keyword=${encodeURIComponent(keyword)}`;
       
       fetch(url)
         .then(response => response.json())
         .then(data => {
-          displaySearchResults(data.results);
+          filterLeftSideByResults(data.results || []);
         })
         .catch(error => {
           console.error('Search error:', error);
-          resultsDiv.innerHTML = '<div class="search-result-item">検索エラーが発生しました</div>';
+          filterLeftSideByResults([]);
         });
-    }
-
-    function displaySearchResults(results) {
-      const resultsDiv = document.getElementById('searchResults');
-      
-      if (results.length === 0) {
-        resultsDiv.innerHTML = '<div class="search-result-item">検索結果が見つかりませんでした</div>';
-        filterLeftSideByResults([]);
-        return;
-      }
-
-      let html = '';
-      results.forEach(result => {
-        const filePathEncoded = encodeURIComponent(result.file_path);
-        const viewUrl = '/view/' + filePathEncoded;
-        html += '<a href="' + viewUrl + '" class="search-result-item" style="text-decoration: none; color: inherit; display: block;">';
-        html += `<div class="search-result-file-name">${escapeHtml(result.file_name)}</div>`;
-        if (result.folder_path) {
-          html += `<div class="search-result-folder">${escapeHtml(result.folder_path)}</div>`;
-        }
-        if (result.matching_text_mappings && result.matching_text_mappings.length > 0) {
-          const mappings = result.matching_text_mappings.map(m => `${escapeHtml(m.juku_name)}:${escapeHtml(m.text_name)}`).join(', ');
-          html += `<div class="search-result-mapping">${mappings}</div>`;
-        }
-        html += '</a>';
-      });
-      
-      resultsDiv.innerHTML = html;
-      filterLeftSideByResults(results);
     }
 
     /** 検索結果に基づき左側のフォルダ・ファイル一覧を絞り込む */
@@ -790,19 +710,6 @@
       });
     }
 
-    function escapeHtml(text) {
-      const div = document.createElement('div');
-      div.textContent = text;
-      return div.innerHTML;
-    }
-
-    // 検索結果の外側をクリックしたら閉じる
-    document.addEventListener('click', function(event) {
-      const searchWrapper = document.querySelector('.search-box-wrapper');
-      if (!searchWrapper.contains(event.target)) {
-        document.getElementById('searchResults').classList.remove('show');
-      }
-    });
   </script>
 </body>
 </html>
