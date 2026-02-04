@@ -356,29 +356,14 @@ def pdf_to_images(filename, username=None, student_name=None, student_number=Non
     out_dir = os.path.join(CACHE_DIR, base)
     os.makedirs(out_dir, exist_ok=True)
 
-    # キャッシュキーを生成（ユーザー名、生徒名、生徒番号、テキスト名、校舎名を含む）
-    # バージョン19: 画面右上に「生徒名：○○　講師名：○○」の形式で表示、PDF内容全体を下と右にシフト
-    cache_key = f"v19_{username or ''}_{student_name or ''}_{student_number or ''}_{text_name or ''}_{campus_name or ''}_{include_qr}"
-    cache_suffix = ""
-    if cache_key.strip():
-        # ハッシュ値を生成してキャッシュサフィックスとして使用
-        cache_hash = hashlib.md5(cache_key.encode('utf-8')).hexdigest()[:8]
-        cache_suffix = f"_{cache_hash}"
-    
-    # 既存の PNG ファイルをチェック（キャッシュキーに基づく）
-    if cache_suffix:
-        existing = [f for f in os.listdir(out_dir) if f.lower().endswith(".png") and cache_suffix in f]
-        if existing:
-            existing.sort()
-            return [os.path.join(out_dir, f) for f in existing]
-    else:
-        # キャッシュサフィックスがない場合（ユーザー名も生徒情報もない場合）
-        existing = [f for f in os.listdir(out_dir) if f.lower().endswith(".png") and not "_" in f.replace("page_", "").replace(".png", "")]
-        if existing:
-            existing.sort()
-            return [os.path.join(out_dir, f) for f in existing]
+    # 出力ファイル名のサフィックス（頭紙QRなど描画内容が変わる場合の区別用。先生名・生徒名は焼き付けないためキーに含めない）
+    output_key = f"v19_{text_name or ''}_{campus_name or ''}_{include_qr}"
+    output_suffix = ""
+    if output_key.strip():
+        output_hash = hashlib.md5(output_key.encode('utf-8')).hexdigest()[:8]
+        output_suffix = f"_{output_hash}"
 
-    # PDFを画像に変換
+    # PDFを画像に変換（キャッシュは使わず毎回変換）
     images = convert_from_path(pdf_path, poppler_path=POPPLER_PATH)
     image_paths = []
     # 印刷時の位置調整：PDF内容全体を下にシフトするための余白
@@ -395,162 +380,74 @@ def pdf_to_images(filename, username=None, student_name=None, student_number=Non
         new_img.paste(img, (right_padding, bottom_padding))
         img = new_img  # 以降は新しい画像を使用
         
-        # 1枚目でテキスト名がある場合、またはユーザー名/生徒情報が指定されている場合、テキストを描画
-        if i == 1 and (username or student_name or student_number or text_name):
+        # 1枚目で頭紙印刷時のみQRコードを描画（先生名・生徒名の焼き付けは行わない）
+        if i == 1 and include_qr and username and text_name:
             try:
                 draw = ImageDraw.Draw(img)
                 img_width, img_height = img.size
-                # フォントサイズを少し大きく（画面右上に表示）
-                font_size = max(20, int(img_width / 80))
-                
-                font = None
                 font_paths = [
                     "C:/Windows/Fonts/msgothic.ttc",
                     "C:/Windows/Fonts/meiryo.ttc",
                     "C:/Windows/Fonts/msmincho.ttc",
                     "arial.ttf"
                 ]
+                # PRINT_IDを生成（一意なID）
+                print_id = generate_print_id()
+                # 元のファイル名を取得（filenameは既にunquote済み）
+                original_filename = filename.replace('\\', '/')
+                save_print_id_mapping(print_id, original_filename)
+                encoded_filename = quote(original_filename, safe='/')
+                qr_data = f"PRINT_ID={print_id},FILE={encoded_filename}"
+                if campus_name:
+                    printer_name = get_printer_name_by_campus(campus_name)
+                    if printer_name:
+                        qr_data += f",PRINTER={printer_name}"
+                qr = qrcode.QRCode(
+                    version=1,
+                    error_correction=qrcode.constants.ERROR_CORRECT_L,
+                    box_size=15,
+                    border=4,
+                )
+                qr.add_data(qr_data)
+                qr.make(fit=True)
+                qr_img = qr.make_image(fill_color="black", back_color="white")
+                qr_size = int(min(img_width, img_height) * 0.2)
+                qr_img = qr_img.resize((qr_size, qr_size), Image.Resampling.LANCZOS)
+                text_font_size = max(14, int(img_width / 80))
+                text_font = None
                 for font_path in font_paths:
                     try:
-                        font = ImageFont.truetype(font_path, font_size)
+                        text_font = ImageFont.truetype(font_path, text_font_size)
                         break
                     except Exception:
                         continue
-                
-                if font is None:
-                    font = ImageFont.load_default()
-                
-                # 画面右上に「生徒名：○○　講師名：○○」の形式で表示
-                top_margin = 50  # 画面上端からの余白（印刷時のマージンを考慮して下げる）
-                right_margin = 20  # 右端からの余白
-                text_spacing = 15  # テキスト間のスペース
-                
-                # 表示するテキストを組み立て
-                display_text_parts = []
-                if student_name:
-                    display_text_parts.append(f"生徒名：{student_name}")
-                if username:
-                    display_text_parts.append(f"講師名：{username}")
-                
-                if display_text_parts:
-                    display_text = "　".join(display_text_parts)  # 全角スペースで区切る
-                    
-                    # テキストのサイズを取得
-                    bbox = draw.textbbox((0, 0), display_text, font=font)
-                    text_width = bbox[2] - bbox[0]
-                    text_height = bbox[3] - bbox[1]
-                    
-                    # 画面右上に配置（右揃え）
-                    x_pos = img_width - text_width - right_margin
-                    y_pos = top_margin
-                    
-                    # テキストを描画
-                    draw.text(
-                        (x_pos, y_pos),
-                        display_text,
-                        fill=(0, 0, 0, 255),
-                        font=font
-                    )
-                
-                # QRコードを生成して左下に配置（PRINT_ID形式）
-                # ※QRコードにはPRINT_IDのみを含み、生徒名・講師名は含まない
-                # include_qrがTrueの場合のみQRコードを表示（頭紙印刷時のみ）
-                if include_qr and username and text_name:
-                    try:
-                        # PRINT_IDを生成（一意なID）
-                        print_id = generate_print_id()
-                        
-                        # 元のファイル名を取得（filenameは既にunquote済み）
-                        # 相対パスをそのまま使用（例: "算数/6年/数の性質_連続する数の積_応用.pdf"）
-                        # パス区切り文字を統一（Windows形式をスラッシュに）
-                        original_filename = filename.replace('\\', '/')
-                        
-                        # PRINT_IDとファイル名のマッピングを保存
-                        save_print_id_mapping(print_id, original_filename)
-                        
-                        # QRコードのデータ: PRINT_ID=QS_YYYY_NNNNN,FILE=元のファイル名（URLエンコード）,PRINTER=プリンター名（校舎選択時のみ）
-                        # 日本語ファイル名を正しく扱うため、URLエンコードしてから埋め込む
-                        encoded_filename = quote(original_filename, safe='/')
-                        qr_data = f"PRINT_ID={print_id},FILE={encoded_filename}"
-                        
-                        # 校舎が選択されている場合、プリンター名をQRコードに追加
-                        if campus_name:
-                            printer_name = get_printer_name_by_campus(campus_name)
-                            if printer_name:
-                                qr_data += f",PRINTER={printer_name}"
-                        
-                        # QRコードを生成
-                        qr = qrcode.QRCode(
-                            version=1,
-                            error_correction=qrcode.constants.ERROR_CORRECT_L,
-                            box_size=15,
-                            border=4,
-                        )
-                        qr.add_data(qr_data)
-                        qr.make(fit=True)
-                        
-                        # QRコード画像を生成
-                        qr_img = qr.make_image(fill_color="black", back_color="white")
-                        
-                        # QRコードのサイズを調整（画像サイズの約20%）
-                        qr_size = int(min(img_width, img_height) * 0.2)
-                        qr_img = qr_img.resize((qr_size, qr_size), Image.Resampling.LANCZOS)
-                        
-                        # QRコードの下にテキストIDを表示するためのフォントを準備
-                        # テキスト用フォント（QRコードより小さく）
-                        text_font_size = max(14, int(img_width / 80))
-                        text_font = None
-                        for font_path in font_paths:
-                            try:
-                                text_font = ImageFont.truetype(font_path, text_font_size)
-                                break
-                            except Exception:
-                                continue
-                        if text_font is None:
-                            text_font = ImageFont.load_default()
-                        
-                        # PRINT_IDのテキストのサイズを取得
-                        text_id = print_id  # テキストIDとしてPRINT_IDを使用
-                        text_bbox = draw.textbbox((0, 0), text_id, font=text_font)
-                        text_text_width = text_bbox[2] - text_bbox[0]
-                        text_text_height = text_bbox[3] - text_bbox[1]
-                        
-                        # テキストの高さを考慮してQRコードの位置を決定
-                        bottom_margin = 15  # 画面下端との最小余白
-                        text_margin = 10  # QRコードとテキストの間のマージン
-                        total_height = qr_size + text_margin + text_text_height + bottom_margin
-                        
-                        # 左下に配置（マージンを考慮、テキスト分のスペースを確保）
-                        margin = 20
-                        qr_x = margin
-                        qr_y = img_height - total_height + bottom_margin
-                        
-                        # QRコードを画像に貼り付け（一度だけ）
-                        img.paste(qr_img, (int(qr_x), int(qr_y)))
-                        
-                        # QRコードの下、中央揃えでテキストを配置
-                        text_x = qr_x + (qr_size - text_text_width) / 2
-                        text_y = qr_y + qr_size + text_margin
-                        
-                        # テキストを描画
-                        draw.text(
-                            (int(text_x), int(text_y)),
-                            text_id,
-                            fill=(0, 0, 0, 255),
-                            font=text_font
-                        )
-                        
-                    except Exception as e:
-                        import traceback
-                        print(f"ERROR: QRコード生成エラー: {e}")
-                        print(f"ERROR: トレースバック:\n{traceback.format_exc()}")
-                    
+                if text_font is None:
+                    text_font = ImageFont.load_default()
+                text_id = print_id
+                text_bbox = draw.textbbox((0, 0), text_id, font=text_font)
+                text_text_width = text_bbox[2] - text_bbox[0]
+                text_text_height = text_bbox[3] - text_bbox[1]
+                bottom_margin = 15
+                text_margin = 10
+                total_height = qr_size + text_margin + text_text_height + bottom_margin
+                margin = 20
+                qr_x = margin
+                qr_y = img_height - total_height + bottom_margin
+                img.paste(qr_img, (int(qr_x), int(qr_y)))
+                text_x = qr_x + (qr_size - text_text_width) / 2
+                text_y = qr_y + qr_size + text_margin
+                draw.text(
+                    (int(text_x), int(text_y)),
+                    text_id,
+                    fill=(0, 0, 0, 255),
+                    font=text_font
+                )
             except Exception as e:
                 import traceback
-                print(f"ERROR: テキスト描画エラー: {e}")
+                print(f"ERROR: QRコード生成エラー: {e}")
                 print(f"ERROR: トレースバック:\n{traceback.format_exc()}")
         
-        img_name = f"page_{i}{cache_suffix}.png"
+        img_name = f"page_{i}{output_suffix}.png"
         img_path = os.path.join(out_dir, img_name)
         img.save(img_path, "PNG")
         image_paths.append(img_path)
