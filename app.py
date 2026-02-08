@@ -753,6 +753,24 @@ def _clear_file_cache(relative_path):
             pass
 
 
+def _rename_file_cache(old_relative_path, new_relative_path):
+    """リネーム時にキャッシュを新パスへ移動（削除せず再利用）"""
+    old_norm = normalize_file_path(old_relative_path)
+    new_norm = normalize_file_path(new_relative_path)
+    old_base, _ = os.path.splitext(old_norm)
+    new_base, _ = os.path.splitext(new_norm)
+    old_dir = os.path.join(CACHE_DIR, old_base)
+    new_dir = os.path.join(CACHE_DIR, new_base)
+    if os.path.isdir(old_dir) and old_dir != new_dir:
+        try:
+            new_parent = os.path.dirname(new_dir)
+            if new_parent:
+                os.makedirs(new_parent, exist_ok=True)
+            os.rename(old_dir, new_dir)
+        except Exception:
+            pass
+
+
 def _resolve_upload_dir(folder_path):
     """アップロード先フォルダの絶対パスを検証して返す。不正ならNone"""
     if folder_path and (".." in folder_path or folder_path.startswith(("/", "\\"))):
@@ -823,7 +841,7 @@ def api_file_rename():
         return jsonify({"success": False, "error": "同名のファイルが既に存在します"}), 400
     try:
         os.rename(src_full, dst_full)
-        _clear_file_cache(file_path)
+        _rename_file_cache(file_path, new_relative)
         update_text_mapping_path(file_path, new_relative)
         history = load_file_name_history()
         if new_relative not in history:
