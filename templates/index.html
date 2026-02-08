@@ -184,32 +184,44 @@
       display: flex;
       align-items: center;
       width: 100%;
-      position: relative;
+      gap: 6px;
     }
-    .file-item-content {
-      flex: 1;
-      display: flex;
-      align-items: center;
-      min-width: 0;
-      margin-right: 50px;
-      padding-right: 350px;
+    .file-item-filename {
+      flex-shrink: 0;
+    }
+    .file-item-filename a {
+      text-decoration: none;
+      color: #0078d4;
+      white-space: nowrap;
     }
     .file-text-mapping {
       color: #666;
-      font-size: 14px;
-      margin-left: 15px;
+      font-size: 12px;
       display: flex;
       flex-wrap: wrap;
-      gap: 10px;
+      gap: 6px;
       align-items: center;
+      width: 140px;
+      max-height: 24px;
+      overflow: hidden;
+      flex-shrink: 0;
+    }
+    .file-item-spacer {
       flex: 1;
+      min-width: 8px;
     }
     .file-text-mapping-item {
       background: #f0f0f0;
-      padding: 4px 8px;
+      padding: 2px 6px;
       border-radius: 4px;
-      font-size: 13px;
+      font-size: 11px;
       white-space: nowrap;
+      flex-shrink: 0;
+    }
+    .file-item-buttons {
+      display: flex;
+      align-items: center;
+      gap: 4px;
       flex-shrink: 0;
     }
     .add-text-btn {
@@ -217,12 +229,10 @@
       color: white;
       border: none;
       border-radius: 50%;
-      width: 28px;
-      height: 28px;
-      font-size: 20px;
+      width: 26px;
+      height: 26px;
+      font-size: 18px;
       cursor: pointer;
-      position: absolute;
-      right: 370px;
       flex-shrink: 0;
       display: flex;
       align-items: center;
@@ -474,19 +484,20 @@
         {% endif %}
         <li class="file-icon" data-file-path="{{ file_path_normalized }}">
           <div class="file-item">
-            <div class="file-item-content" onclick="window.location.href='{{ file_url }}'">
-              <a href="{{ file_url }}" style="text-decoration: none; color: #0078d4; flex-shrink: 0; white-space: nowrap;">{{ file }}</a>
+            <div class="file-item-filename" onclick="window.location.href='{{ file_url }}'">
+              <a href="{{ file_url }}">{{ file }}</a>
             </div>
             <button class="add-text-btn" onclick="event.stopPropagation(); openTextMappingModal('{{ file_path_normalized }}', '{{ file }}');" title="テキスト対応を追加">+</button>
-            <button class="file-action-btn rename-btn" onclick="event.stopPropagation(); openRenameModal(this);" data-file-path="{{ file_path_normalized | e }}" data-file-name="{{ file | e }}" title="名前を変更">名前変更</button>
-            <button class="file-action-btn delete-file-btn" onclick="event.stopPropagation(); deleteFile(this);" data-file-path="{{ file_path_normalized | e }}" data-file-name="{{ file | e }}" title="削除">削除</button>
-            {% if mappings and mappings|length > 0 %}
-              <div class="file-text-mapping">
-                {% for mapping in mappings %}
-                  <span class="file-text-mapping-item">{{ mapping.juku_name }}:{{ mapping.text_name }}</span>
-                {% endfor %}
-              </div>
-            {% endif %}
+            <div class="file-text-mapping">
+              {% for mapping in mappings %}
+                <span class="file-text-mapping-item">{{ mapping.juku_name }}{% if mapping.text_name %}:{{ mapping.text_name }}{% endif %}</span>
+              {% endfor %}
+            </div>
+            <div class="file-item-spacer"></div>
+            <div class="file-item-buttons">
+              <button class="file-action-btn rename-btn" onclick="event.stopPropagation(); openRenameModal(this);" data-file-path="{{ file_path_normalized | e }}" data-file-name="{{ file | e }}" title="名前を変更">名前変更</button>
+              <button class="file-action-btn delete-file-btn" onclick="event.stopPropagation(); deleteFile(this);" data-file-path="{{ file_path_normalized | e }}" data-file-name="{{ file | e }}" title="削除">削除</button>
+            </div>
           </div>
         </li>
       {% endfor %}
@@ -505,12 +516,8 @@
             <input type="text" id="modalFileName" readonly style="background: #f0f0f0;">
           </div>
           <div class="form-group">
-            <label>塾名:</label>
-            <input type="text" id="modalJukuName" placeholder="例: SAPIX">
-          </div>
-          <div class="form-group">
-            <label>テキスト名:</label>
-            <input type="text" id="modalTextName" placeholder="例: 61-01数の性質">
+            <label>タグ（塾テキスト名・単元名・学校名など）:</label>
+            <input type="text" id="modalTag" placeholder="例: SAPIX 61-01数の性質、開成中学">
           </div>
           <div class="form-actions">
             <button class="btn btn-secondary" onclick="closeTextMappingModal()">キャンセル</button>
@@ -616,8 +623,7 @@
       currentFilePath = filePath;
       currentFileName = fileName;
       document.getElementById('modalFileName').value = fileName;
-      document.getElementById('modalJukuName').value = '';
-      document.getElementById('modalTextName').value = '';
+      document.getElementById('modalTag').value = '';
       document.getElementById('textMappingModal').style.display = 'block';
       loadExistingMappings(fileName);
     }
@@ -636,15 +642,15 @@
         return;
       }
       
-      container.innerHTML = '<div style="margin-bottom: 10px; font-weight: 500;">既存の対応:</div>';
-      currentMappings.forEach((mapping, index) => {
+      container.innerHTML = '<div style="margin-bottom: 10px; font-weight: 500;">既存のタグ:</div>';
+      currentMappings.forEach((mapping) => {
         const item = document.createElement('div');
         item.className = 'text-mapping-list-item';
-        // エスケープして安全に表示
-        const jukuName = mapping.juku_name.replace(/'/g, "\\'");
-        const textName = mapping.text_name.replace(/'/g, "\\'");
+        const tagDisplay = mapping.text_name ? mapping.juku_name + ':' + mapping.text_name : mapping.juku_name;
+        const jukuName = (mapping.juku_name || '').replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+        const textName = (mapping.text_name || '').replace(/\\/g, '\\\\').replace(/'/g, "\\'");
         item.innerHTML = `
-          <span>${mapping.juku_name}:${mapping.text_name}</span>
+          <span>${tagDisplay.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</span>
           <button class="delete-mapping-btn" onclick="deleteTextMapping('${jukuName}', '${textName}')">削除</button>
         `;
         container.appendChild(item);
@@ -652,11 +658,10 @@
     }
 
     function addTextMapping() {
-      const jukuName = document.getElementById('modalJukuName').value.trim();
-      const textName = document.getElementById('modalTextName').value.trim();
+      const tag = document.getElementById('modalTag').value.trim();
       
-      if (!jukuName || !textName) {
-        alert('塾名とテキスト名を入力してください。');
+      if (!tag) {
+        alert('タグを入力してください。');
         return;
       }
 
@@ -667,8 +672,7 @@
         },
         body: JSON.stringify({
           file_path: currentFilePath,
-          juku_name: jukuName,
-          text_name: textName
+          tag: tag
         })
       })
       .then(response => response.json())
@@ -686,7 +690,8 @@
     }
 
     function deleteTextMapping(jukuName, textName) {
-      if (!confirm(`「${jukuName}:${textName}」を削除しますか？`)) {
+      const display = textName ? jukuName + ':' + textName : jukuName;
+      if (!confirm('「' + display + '」を削除しますか？')) {
         return;
       }
 
@@ -698,7 +703,7 @@
         body: JSON.stringify({
           file_path: currentFilePath,
           juku_name: jukuName,
-          text_name: textName
+          text_name: textName || ''
         })
       })
       .then(response => response.json())

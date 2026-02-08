@@ -893,19 +893,19 @@ def normalize_file_path(file_path):
 @app.route("/api/text-mapping", methods=["POST"])
 @login_required
 def add_text_mapping_api():
-    """テキスト対応情報を追加するAPI"""
+    """テキスト対応情報を追加するAPI（タグ1つ）"""
     data = request.get_json()
     file_path = data.get("file_path", "")
-    juku_name = data.get("juku_name", "").strip()
-    text_name = data.get("text_name", "").strip()
+    tag = data.get("tag", "").strip()
+    # 後方互換: juku_name + text_name でも可
+    if not tag and data.get("juku_name"):
+        tag = (data.get("juku_name", "") + ":" + data.get("text_name", "")).strip(":")
     
-    if not file_path or not juku_name or not text_name:
-        return {"success": False, "error": "必要な情報が不足しています"}, 400
+    if not file_path or not tag:
+        return {"success": False, "error": "タグを入力してください"}, 400
     
-    # ファイルパスを正規化
     file_path = normalize_file_path(file_path)
-    
-    add_text_mapping(file_path, juku_name, text_name)
+    add_text_mapping(file_path, tag, "")
     return {"success": True}
 
 
@@ -918,12 +918,10 @@ def delete_text_mapping_api():
     juku_name = data.get("juku_name", "").strip()
     text_name = data.get("text_name", "").strip()
     
-    if not file_path or not juku_name or not text_name:
+    if not file_path or not juku_name:
         return {"success": False, "error": "必要な情報が不足しています"}, 400
     
-    # ファイルパスを正規化
     file_path = normalize_file_path(file_path)
-    
     delete_text_mapping(file_path, juku_name, text_name)
     return {"success": True}
 
