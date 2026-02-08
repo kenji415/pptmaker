@@ -6,6 +6,7 @@ import hashlib
 import uuid
 import tempfile
 import yaml
+import shutil
 from datetime import datetime
 from urllib.parse import quote, unquote
 from functools import wraps
@@ -713,6 +714,103 @@ def delete_text_mapping(file_path, juku_name, text_name):
         if not mappings[file_path]:
             del mappings[file_path]
         save_text_mappings(mappings)
+
+
+def update_text_mapping_path(old_path, new_path):
+    """ファイルリネーム時にテキスト対応のキーを更新"""
+    mappings = load_text_mappings()
+    old_norm = normalize_file_path(old_path)
+    new_norm = normalize_file_path(new_path)
+    if old_norm in mappings:
+        mappings[new_norm] = mappings.pop(old_norm)
+        save_text_mappings(mappings)
+
+
+def _resolve_and_validate_pdf_path(relative_path):
+    """相対パスを検証し、PDF_DIR内の絶対パスを返す。不正ならNone"""
+    if not relative_path or ".." in relative_path or relative_path.startswith(("/", "\\")):
+        return None
+    norm = normalize_file_path(relative_path)
+    if not norm.lower().endswith(".pdf"):
+        return None
+    full = os.path.join(PDF_DIR, norm)
+    abs_full = os.path.abspath(full)
+    abs_pdf_dir = os.path.abspath(PDF_DIR)
+    if not abs_full.startswith(abs_pdf_dir):
+        return None
+    return abs_full
+
+
+def _clear_file_cache(relative_path):
+    """指定ファイルのキャッシュを削除"""
+    norm = normalize_file_path(relative_path)
+    base, _ = os.path.splitext(norm)
+    out_dir = os.path.join(CACHE_DIR, base)
+    if os.path.isdir(out_dir):
+        try:
+            shutil.rmtree(out_dir)
+        except Exception:
+            pass
+
+
+@app.route("/api/file/rename", methods=["POST"])
+@login_required
+def api_file_rename():
+    """PDFファイルをリネーム（実ファイルも変更）"""
+    data = request.get_json()
+    file_path = data.get("file_path", "").strip()
+    new_name = data.get("new_name", "").strip()
+    if not file_path or not new_name:
+        return jsonify({"success": False, "error": "file_path と new_name が必要です"}), 400
+    if ".." in new_name or "/" in new_name or "\\" in new_name:
+        return jsonify({"success": False, "error": "new_name にはファイル名のみ指定してください"}), 400
+    if not new_name.lower().endswith(".pdf"):
+        new_name = new_name + ".pdf"
+    src_full = _resolve_and_validate_pdf_path(file_path)
+    if not src_full or not os.path.exists(src_full):
+        return jsonify({"success": False, "error": "ファイルが見つかりません"}), 404
+    dir_path = os.path.dirname(file_path)
+    new_relative = (dir_path + "/" + new_name) if dir_path else new_name
+    new_relative = normalize_file_path(new_relative)
+    dst_full = os.path.join(PDF_DIR, new_relative)
+    if os.path.exists(dst_full):
+        return jsonify({"success": False, "error": "同名のファイルが既に存在します"}), 400
+    try:
+        os.rename(src_full, dst_full)
+        _clear_file_cache(file_path)
+        update_text_mapping_path(file_path, new_relative)
+        history = load_file_name_history()
+        if new_relative not in history:
+            history[new_relative] = []
+        history[new_relative].append(file_path)
+        save_file_name_history(history)
+        return jsonify({"success": True, "new_path": new_relative})
+    except OSError as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/api/file", methods=["DELETE"])
+@login_required
+def api_file_delete():
+    """PDFファイルを削除（実ファイルも削除）"""
+    data = request.get_json()
+    file_path = data.get("file_path", "").strip()
+    if not file_path:
+        return jsonify({"success": False, "error": "file_path が必要です"}), 400
+    full = _resolve_and_validate_pdf_path(file_path)
+    if not full or not os.path.exists(full):
+        return jsonify({"success": False, "error": "ファイルが見つかりません"}), 404
+    try:
+        os.remove(full)
+        _clear_file_cache(file_path)
+        mappings = load_text_mappings()
+        norm = normalize_file_path(file_path)
+        if norm in mappings:
+            del mappings[norm]
+            save_text_mappings(mappings)
+        return jsonify({"success": True})
+    except OSError as e:
+        return jsonify({"success": False, "error": str(e)}), 500
 
 
 @app.route("/login", methods=["GET", "POST"])

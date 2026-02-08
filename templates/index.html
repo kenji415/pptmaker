@@ -341,6 +341,31 @@
     .delete-mapping-btn:hover {
       background: #c82333;
     }
+    .file-action-btn {
+      background: #6c757d;
+      color: white;
+      border: none;
+      border-radius: 4px;
+      padding: 4px 8px;
+      cursor: pointer;
+      font-size: 11px;
+      margin-left: 4px;
+    }
+    .file-action-btn:hover {
+      background: #5a6268;
+    }
+    .file-action-btn.rename-btn {
+      background: #17a2b8;
+    }
+    .file-action-btn.rename-btn:hover {
+      background: #138496;
+    }
+    .file-action-btn.delete-file-btn {
+      background: #dc3545;
+    }
+    .file-action-btn.delete-file-btn:hover {
+      background: #c82333;
+    }
     .search-box-wrapper {
       position: relative;
       width: 250px;
@@ -453,6 +478,8 @@
               <a href="{{ file_url }}" style="text-decoration: none; color: #0078d4; flex-shrink: 0; white-space: nowrap;">{{ file }}</a>
             </div>
             <button class="add-text-btn" onclick="event.stopPropagation(); openTextMappingModal('{{ file_path_normalized }}', '{{ file }}');" title="テキスト対応を追加">+</button>
+            <button class="file-action-btn rename-btn" onclick="event.stopPropagation(); openRenameModal(this);" data-file-path="{{ file_path_normalized | e }}" data-file-name="{{ file | e }}" title="名前を変更">名前変更</button>
+            <button class="file-action-btn delete-file-btn" onclick="event.stopPropagation(); deleteFile(this);" data-file-path="{{ file_path_normalized | e }}" data-file-name="{{ file | e }}" title="削除">削除</button>
             {% if mappings and mappings|length > 0 %}
               <div class="file-text-mapping">
                 {% for mapping in mappings %}
@@ -494,6 +521,26 @@
       </div>
     </div>
 
+    <!-- ファイル名変更モーダル -->
+    <div id="renameModal" class="modal">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h2>ファイル名を変更</h2>
+          <span class="close" onclick="closeRenameModal()">&times;</span>
+        </div>
+        <div style="flex: 1; overflow-y: auto;">
+          <div class="form-group">
+            <label>新しいファイル名:</label>
+            <input type="text" id="renameNewName" placeholder="例: 新しい名前.pdf">
+          </div>
+          <div class="form-actions">
+            <button class="btn btn-secondary" onclick="closeRenameModal()">キャンセル</button>
+            <button class="btn btn-primary" onclick="doRenameFile()">変更</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
     {% if not folders and not files %}
       <p>フォルダまたはPDFファイルが見つかりません。</p>
       <p class="text-muted" style="margin-top: 8px;">参照先: <code>{{ pdf_dir }}</code></p>
@@ -506,6 +553,64 @@
     let currentFilePath = '';
     let currentFileName = '';
     let currentMappings = [];
+    let renameFilePath = '';
+    let renameFileName = '';
+
+    function openRenameModal(btn) {
+      renameFilePath = btn.dataset.filePath || '';
+      renameFileName = btn.dataset.fileName || '';
+      document.getElementById('renameNewName').value = renameFileName;
+      document.getElementById('renameModal').style.display = 'block';
+    }
+
+    function closeRenameModal() {
+      document.getElementById('renameModal').style.display = 'none';
+    }
+
+    function doRenameFile() {
+      const newName = document.getElementById('renameNewName').value.trim();
+      if (!newName) {
+        alert('新しいファイル名を入力してください。');
+        return;
+      }
+      fetch('/api/file/rename', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ file_path: renameFilePath, new_name: newName })
+      })
+      .then(response => response.json())
+      .then(data => {
+        if (data.success) {
+          closeRenameModal();
+          location.reload();
+        } else {
+          alert('名前変更に失敗しました: ' + (data.error || '不明なエラー'));
+        }
+      })
+      .catch(() => alert('名前変更に失敗しました。'));
+    }
+
+    function deleteFile(btn) {
+      const filePath = btn.dataset.filePath || '';
+      const fileName = btn.dataset.fileName || '';
+      if (!confirm('「' + fileName + '」を削除しますか？\n※PDFファイルもディスクから削除されます。')) {
+        return;
+      }
+      fetch('/api/file', {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ file_path: filePath })
+      })
+      .then(response => response.json())
+      .then(data => {
+        if (data.success) {
+          location.reload();
+        } else {
+          alert('削除に失敗しました: ' + (data.error || '不明なエラー'));
+        }
+      })
+      .catch(() => alert('削除に失敗しました。'));
+    }
 
     function openTextMappingModal(filePath, fileName) {
       currentFilePath = filePath;
