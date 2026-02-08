@@ -753,6 +753,52 @@ def _clear_file_cache(relative_path):
             pass
 
 
+def _resolve_upload_dir(folder_path):
+    """アップロード先フォルダの絶対パスを検証して返す。不正ならNone"""
+    if folder_path and (".." in folder_path or folder_path.startswith(("/", "\\"))):
+        return None
+    norm = normalize_file_path(folder_path) if folder_path else ""
+    full = os.path.join(PDF_DIR, norm) if norm else PDF_DIR
+    abs_full = os.path.abspath(full)
+    abs_pdf_dir = os.path.abspath(PDF_DIR)
+    if not abs_full.startswith(abs_pdf_dir):
+        return None
+    return abs_full
+
+
+@app.route("/api/file/upload", methods=["POST"])
+@login_required
+def api_file_upload():
+    """PDFファイルをアップロード（操作したフォルダに格納）"""
+    folder_path = request.form.get("folder_path", "").strip()
+    if "file" not in request.files:
+        return jsonify({"success": False, "error": "ファイルが指定されていません"}), 400
+    f = request.files["file"]
+    if not f or not f.filename:
+        return jsonify({"success": False, "error": "ファイルが指定されていません"}), 400
+    if not f.filename.lower().endswith(".pdf"):
+        return jsonify({"success": False, "error": "PDFファイルのみアップロードできます"}), 400
+    safe_name = os.path.basename(f.filename)
+    if ".." in safe_name or "/" in safe_name or "\\" in safe_name:
+        return jsonify({"success": False, "error": "不正なファイル名です"}), 400
+    target_dir = _resolve_upload_dir(folder_path)
+    if not target_dir:
+        target_dir = PDF_DIR
+    try:
+        os.makedirs(target_dir, exist_ok=True)
+    except OSError:
+        return jsonify({"success": False, "error": "フォルダを作成できません"}), 500
+    dst = os.path.join(target_dir, safe_name)
+    if os.path.exists(dst):
+        return jsonify({"success": False, "error": "同名のファイルが既に存在します"}), 400
+    try:
+        f.save(dst)
+        rel = os.path.relpath(dst, PDF_DIR).replace("\\", "/")
+        return jsonify({"success": True, "file_path": rel})
+    except OSError as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
 @app.route("/api/file/rename", methods=["POST"])
 @login_required
 def api_file_rename():

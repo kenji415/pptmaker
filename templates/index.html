@@ -160,11 +160,27 @@
     }
     .breadcrumb {
       margin-bottom: 10px;
+      padding: 10px 0;
+    }
+    .toolbar-row {
       display: flex;
       align-items: center;
       justify-content: space-between;
+      width: 100%;
       gap: 15px;
-      padding: 10px 0;
+    }
+    .toolbar-left {
+      display: flex;
+      align-items: center;
+      gap: 15px;
+      flex-shrink: 0;
+    }
+    .toolbar-right {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-left: auto;
+      flex-shrink: 0;
     }
     .breadcrumb a {
       color: #0078d4;
@@ -407,6 +423,22 @@
     .file-list li.search-hidden {
       display: none !important;
     }
+    .pdf-add-btn {
+      background: #28a745;
+      color: white;
+      border: none;
+      border-radius: 4px;
+      padding: 8px 16px;
+      cursor: pointer;
+      font-size: 14px;
+      font-weight: 500;
+    }
+    .pdf-add-btn:hover {
+      background: #218838;
+    }
+    .pdf-add-btn input[type="file"] {
+      display: none;
+    }
   </style>
 </head>
 <body>
@@ -430,15 +462,21 @@
       </div>
     </div>
 
-    {% if current_path %}
-      {% set parent_path = current_path.rsplit('/', 1)[0] if '/' in current_path else '' %}
-      <div class="breadcrumb">
-        <div style="display: flex; align-items: center; gap: 15px;">
+    <div class="breadcrumb toolbar-row" id="toolbarEl" data-current-folder="{{ current_path or '' }}">
+      <div class="toolbar-left">
+        {% if current_path %}
+          {% set parent_path = current_path.rsplit('/', 1)[0] if '/' in current_path else '' %}
           <a href="/folder/{{ parent_path }}">← 戻る</a>
           {% if current_path_display %}
             <span class="breadcrumb-path">{{ current_path_display }}</span>
           {% endif %}
-        </div>
+        {% endif %}
+      </div>
+      <div class="toolbar-right">
+        <label class="pdf-add-btn">
+          PDF追加
+          <input type="file" id="pdfUploadInput" accept=".pdf" onchange="uploadPdf(this)">
+        </label>
         <div class="search-box-wrapper">
           <div class="search-box">
             <span class="search-icon">🔍</span>
@@ -446,7 +484,7 @@
           </div>
         </div>
       </div>
-    {% endif %}
+    </div>
 
     <ul class="folder-list">
       {% for folder in folders %}
@@ -557,11 +595,34 @@
 
   <script>
     const fileTextMappings = {{ file_text_mappings | tojson }};
+    const currentFolderPath = document.getElementById('toolbarEl')?.dataset?.currentFolder || '';
     let currentFilePath = '';
     let currentFileName = '';
     let currentMappings = [];
     let renameFilePath = '';
     let renameFileName = '';
+
+    function uploadPdf(inputEl) {
+      const file = inputEl.files?.[0];
+      if (!file) return;
+      const formData = new FormData();
+      formData.append('file', file);
+      formData.append('folder_path', currentFolderPath);
+      fetch('/api/file/upload', {
+        method: 'POST',
+        body: formData
+      })
+      .then(response => response.json())
+      .then(data => {
+        if (data.success) {
+          location.reload();
+        } else {
+          alert('アップロードに失敗しました: ' + (data.error || '不明なエラー'));
+        }
+      })
+      .catch(() => alert('アップロードに失敗しました。'));
+      inputEl.value = '';
+    }
 
     function openRenameModal(btn) {
       renameFilePath = btn.dataset.filePath || '';
