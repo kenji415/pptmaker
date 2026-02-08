@@ -4,6 +4,7 @@ import re
 import locale
 import hashlib
 import uuid
+import tempfile
 import yaml
 from datetime import datetime
 from urllib.parse import quote, unquote
@@ -23,14 +24,50 @@ app.secret_key = os.environ.get("SECRET_KEY", "your-secret-key-change-this-in-pr
 # 設定: 環境変数で上書き可能、なければローカルパスを使用
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-PDF_DIR = os.environ.get("PDF_DIR", r"Y:\算数科作業フォルダ\QS\test_pdf")
-CACHE_DIR = os.path.join(BASE_DIR, "cache")
+# PDF_DIR: pdf_dir.txt (UTF-8) > 環境変数 > Y: > ローカル pdf（バッチの日本語パスは文字化けするためファイル優先）
+PDF_DIR = None
+_pdf_dir_file = os.path.join(BASE_DIR, "pdf_dir.txt")
+if os.path.exists(_pdf_dir_file):
+    try:
+        with open(_pdf_dir_file, "r", encoding="utf-8") as f:
+            _line = f.read().strip()
+            if _line:
+                PDF_DIR = _line
+    except Exception:
+        pass
+if not PDF_DIR and os.environ.get("PDF_DIR"):
+    PDF_DIR = os.environ.get("PDF_DIR")
+if not PDF_DIR:
+    _y_path = r"Y:\算数科作業フォルダ\QS\test_pdf"
+    if os.path.exists(os.path.dirname(_y_path)):
+        PDF_DIR = _y_path
+    else:
+        PDF_DIR = os.path.join(BASE_DIR, "pdf")
+# キャッシュは残さない: 一時フォルダを使いプロジェクト内に残さない
+CACHE_DIR = os.path.join(tempfile.gettempdir(), "printviewer_cache")
 LOG_FILE = os.path.join(BASE_DIR, "logs", "print_log.csv")
-POPPLER_PATH = os.environ.get("POPPLER_PATH", None)
-if POPPLER_PATH is None:
-    default_poppler_path = r"C:\tools\poppler-25.12.0\Library\bin"
-    if os.path.exists(default_poppler_path):
-        POPPLER_PATH = default_poppler_path
+# Poppler: poppler_path.txt (1行目) > 環境変数 > よくあるインストール先
+POPPLER_PATH = None
+_poppler_file = os.path.join(BASE_DIR, "poppler_path.txt")
+if os.path.exists(_poppler_file):
+    try:
+        with open(_poppler_file, "r", encoding="utf-8") as f:
+            _line = f.readline().strip()
+            if _line and os.path.exists(_line):
+                POPPLER_PATH = _line
+    except Exception:
+        pass
+if not POPPLER_PATH and os.environ.get("POPPLER_PATH"):
+    POPPLER_PATH = os.environ.get("POPPLER_PATH")
+if not POPPLER_PATH:
+    for _p in (
+        r"C:\tools\poppler-25.12.0\Library\bin",
+        r"C:\Program Files\poppler\Library\bin",
+        r"C:\poppler\Library\bin",
+    ):
+        if os.path.exists(_p):
+            POPPLER_PATH = _p
+            break
 USERS_FILE = os.path.join(BASE_DIR, "users.csv")
 STUDENTS_DIR = os.path.join(BASE_DIR, "students")
 TEXT_MAPPING_FILE = os.path.join(BASE_DIR, "text_mapping.csv")
@@ -42,8 +79,11 @@ PRINTERS_CONFIG = os.path.join(BASE_DIR, "printers.yaml")
 os.makedirs(STUDENTS_DIR, exist_ok=True)
 os.makedirs(CACHE_DIR, exist_ok=True)
 os.makedirs(os.path.dirname(LOG_FILE) if os.path.dirname(LOG_FILE) else ".", exist_ok=True)
-os.makedirs(PDF_DIR, exist_ok=True)
-
+try:
+    os.makedirs(PDF_DIR, exist_ok=True)
+except OSError:
+    PDF_DIR = os.path.join(BASE_DIR, "pdf")
+    os.makedirs(PDF_DIR, exist_ok=True)
 
 def get_current_user():
     """セッションからユーザー名を取得"""
@@ -341,9 +381,64 @@ def create_header_with_qr(filename, username, text_name, campus_name=None):
     return img
 
 
+def _draw_qr_on_image(img, filename, username, text_name, campus_name):
+    """画像の1枚目にQRコードを描画（破壊的）。失敗時は何もしない。"""
+    try:
+        draw = ImageDraw.Draw(img)
+        img_width, img_height = img.size
+        font_paths = [
+            "C:/Windows/Fonts/msgothic.ttc",
+            "C:/Windows/Fonts/meiryo.ttc",
+            "C:/Windows/Fonts/msmincho.ttc",
+            "arial.ttf"
+        ]
+        print_id = generate_print_id()
+        original_filename = filename.replace('\\', '/')
+        save_print_id_mapping(print_id, original_filename)
+        encoded_filename = quote(original_filename, safe='/')
+        qr_data = f"PRINT_ID={print_id},FILE={encoded_filename}"
+        if campus_name:
+            printer_name = get_printer_name_by_campus(campus_name)
+            if printer_name:
+                qr_data += f",PRINTER={printer_name}"
+        qr = qrcode.QRCode(version=1, error_correction=qrcode.constants.ERROR_CORRECT_L, box_size=15, border=4)
+        qr.add_data(qr_data)
+        qr.make(fit=True)
+        qr_img = qr.make_image(fill_color="black", back_color="white")
+        qr_size = int(min(img_width, img_height) * 0.2)
+        qr_img = qr_img.resize((qr_size, qr_size), Image.Resampling.LANCZOS)
+        text_font_size = max(14, int(img_width / 80))
+        text_font = None
+        for fp in font_paths:
+            try:
+                text_font = ImageFont.truetype(fp, text_font_size)
+                break
+            except Exception:
+                continue
+        if text_font is None:
+            text_font = ImageFont.load_default()
+        text_id = print_id
+        text_bbox = draw.textbbox((0, 0), text_id, font=text_font)
+        text_text_width = text_bbox[2] - text_bbox[0]
+        text_text_height = text_bbox[3] - text_bbox[1]
+        bottom_margin = 15
+        text_margin = 10
+        total_height = qr_size + text_margin + text_text_height + bottom_margin
+        margin = 20
+        qr_x = margin
+        qr_y = img_height - total_height + bottom_margin
+        img.paste(qr_img, (int(qr_x), int(qr_y)))
+        text_x = qr_x + (qr_size - text_text_width) / 2
+        text_y = qr_y + qr_size + text_margin
+        draw.text((int(text_x), int(text_y)), text_id, fill=(0, 0, 0, 255), font=text_font)
+    except Exception as e:
+        import traceback
+        print(f"ERROR: QRコード生成エラー: {e}")
+        print(f"ERROR: トレースバック:\n{traceback.format_exc()}")
+
+
 def pdf_to_images(filename, username=None, student_name=None, student_number=None, text_name=None, campus_name=None, include_qr=False):
-    """PDFを画像に変換"""
-    # URLデコード
+    """PDFを画像に変換。テキストは1PDFあたり1キャッシュ（全員共有）。頭紙はキャッシュしない。"""
     filename = unquote(filename)
     base, ext = os.path.splitext(filename)
     if ext.lower() != ".pdf":
@@ -355,102 +450,51 @@ def pdf_to_images(filename, username=None, student_name=None, student_number=Non
 
     out_dir = os.path.join(CACHE_DIR, base)
     os.makedirs(out_dir, exist_ok=True)
+    bottom_padding = 60
+    right_padding = 30
 
-    # 出力ファイル名のサフィックス（頭紙QRなど描画内容が変わる場合の区別用。先生名・生徒名は焼き付けないためキーに含めない）
-    output_key = f"v19_{text_name or ''}_{campus_name or ''}_{include_qr}"
-    output_suffix = ""
-    if output_key.strip():
-        output_hash = hashlib.md5(output_key.encode('utf-8')).hexdigest()[:8]
-        output_suffix = f"_{output_hash}"
+    # ページ数だけ fitz で取得
+    doc = fitz.open(pdf_path)
+    num_pages = len(doc)
+    doc.close()
 
-    # PDFを画像に変換（キャッシュは使わず毎回変換）
+    # キャッシュ済みなら再利用（全員同じキャッシュ、ファイル数以上増えない）
+    cache_ok = all(
+        os.path.exists(os.path.join(out_dir, f"page_{p}.png"))
+        for p in range(1, num_pages + 1)
+    )
+    if cache_ok:
+        image_paths = [os.path.join(out_dir, f"page_{i}.png") for i in range(1, num_pages + 1)]
+        if include_qr and username and text_name:
+            page1_path = os.path.join(out_dir, "page_1.png")
+            img1 = Image.open(page1_path).convert("RGB")
+            _draw_qr_on_image(img1, filename, username, text_name, campus_name)
+            qr_path = os.path.join(out_dir, "page_1_qr.png")
+            img1.save(qr_path, "PNG")
+            image_paths[0] = qr_path
+        return image_paths
+
+    # キャッシュなし: 変換して保存（QRは保存しない＝page_1.png は常に無QR）
     images = convert_from_path(pdf_path, poppler_path=POPPLER_PATH)
     image_paths = []
-    # 印刷時の位置調整：PDF内容全体を下にシフトするための余白
-    bottom_padding = 60  # 上に追加する余白（ピクセル）- 画像を下にシフトするため
-    right_padding = 30  # 左に追加する余白（ピクセル）- 画像を右にシフトするため
-    
+
     for i, img in enumerate(images, start=1):
-        # 元の画像サイズを取得
         original_width, original_height = img.size
-        
-        # 上と左に余白を追加した新しい画像を作成（画像を下と右にシフトするため）
         new_img = Image.new('RGB', (original_width + right_padding, original_height + bottom_padding), color='white')
-        # 元の画像を新しい画像の右下側に配置（上と左に余白ができ、画像が下と右にシフトされる）
         new_img.paste(img, (right_padding, bottom_padding))
-        img = new_img  # 以降は新しい画像を使用
-        
-        # 1枚目で頭紙印刷時のみQRコードを描画（先生名・生徒名の焼き付けは行わない）
+        img = new_img
+
+        # 1枚目は常に無QRでキャッシュ保存
+        page_path = os.path.join(out_dir, f"page_{i}.png")
+        img.save(page_path, "PNG")
+        image_paths.append(page_path)
+
+        # 1枚目でQRが必要なときは別ファイルに保存（上書き可、キャッシュ件数は増やさない）
         if i == 1 and include_qr and username and text_name:
-            try:
-                draw = ImageDraw.Draw(img)
-                img_width, img_height = img.size
-                font_paths = [
-                    "C:/Windows/Fonts/msgothic.ttc",
-                    "C:/Windows/Fonts/meiryo.ttc",
-                    "C:/Windows/Fonts/msmincho.ttc",
-                    "arial.ttf"
-                ]
-                # PRINT_IDを生成（一意なID）
-                print_id = generate_print_id()
-                # 元のファイル名を取得（filenameは既にunquote済み）
-                original_filename = filename.replace('\\', '/')
-                save_print_id_mapping(print_id, original_filename)
-                encoded_filename = quote(original_filename, safe='/')
-                qr_data = f"PRINT_ID={print_id},FILE={encoded_filename}"
-                if campus_name:
-                    printer_name = get_printer_name_by_campus(campus_name)
-                    if printer_name:
-                        qr_data += f",PRINTER={printer_name}"
-                qr = qrcode.QRCode(
-                    version=1,
-                    error_correction=qrcode.constants.ERROR_CORRECT_L,
-                    box_size=15,
-                    border=4,
-                )
-                qr.add_data(qr_data)
-                qr.make(fit=True)
-                qr_img = qr.make_image(fill_color="black", back_color="white")
-                qr_size = int(min(img_width, img_height) * 0.2)
-                qr_img = qr_img.resize((qr_size, qr_size), Image.Resampling.LANCZOS)
-                text_font_size = max(14, int(img_width / 80))
-                text_font = None
-                for font_path in font_paths:
-                    try:
-                        text_font = ImageFont.truetype(font_path, text_font_size)
-                        break
-                    except Exception:
-                        continue
-                if text_font is None:
-                    text_font = ImageFont.load_default()
-                text_id = print_id
-                text_bbox = draw.textbbox((0, 0), text_id, font=text_font)
-                text_text_width = text_bbox[2] - text_bbox[0]
-                text_text_height = text_bbox[3] - text_bbox[1]
-                bottom_margin = 15
-                text_margin = 10
-                total_height = qr_size + text_margin + text_text_height + bottom_margin
-                margin = 20
-                qr_x = margin
-                qr_y = img_height - total_height + bottom_margin
-                img.paste(qr_img, (int(qr_x), int(qr_y)))
-                text_x = qr_x + (qr_size - text_text_width) / 2
-                text_y = qr_y + qr_size + text_margin
-                draw.text(
-                    (int(text_x), int(text_y)),
-                    text_id,
-                    fill=(0, 0, 0, 255),
-                    font=text_font
-                )
-            except Exception as e:
-                import traceback
-                print(f"ERROR: QRコード生成エラー: {e}")
-                print(f"ERROR: トレースバック:\n{traceback.format_exc()}")
-        
-        img_name = f"page_{i}{output_suffix}.png"
-        img_path = os.path.join(out_dir, img_name)
-        img.save(img_path, "PNG")
-        image_paths.append(img_path)
+            _draw_qr_on_image(img, filename, username, text_name, campus_name)
+            qr_path = os.path.join(out_dir, "page_1_qr.png")
+            img.save(qr_path, "PNG")
+            image_paths[0] = qr_path
 
     return image_paths
 
@@ -967,7 +1011,8 @@ def folder_view(folder_path=""):
         current_path_display=current_path_display,  # 表示用（デコード済み）
         file_text_mappings=file_text_mappings,  # ファイルごとのテキスト対応情報
         username=session.get("username", "unknown"),
-        is_admin=session.get("is_admin", False)
+        is_admin=session.get("is_admin", False),
+        pdf_dir=PDF_DIR,
     )
 
 
@@ -1122,22 +1167,13 @@ def header(filename):
         # 画像を2倍のサイズに拡大（印刷時に200%倍率が必要な問題を解決）
         header_img_large = header_img.resize((img_width * 2, img_height * 2), Image.Resampling.LANCZOS)
         
-        # 画像をキャッシュディレクトリに保存（DPI情報を設定）
-        base, _ = os.path.splitext(decoded_filename)
-        cache_dir = os.path.join(CACHE_DIR, base)
-        os.makedirs(cache_dir, exist_ok=True)
-        header_file_path = os.path.join(cache_dir, "header.png")
-        # DPI情報を設定（72 DPI = 1インチ = 72ピクセル）
-        # A4 landscape: 297mm x 210mm = 11.69インチ x 8.27インチ
-        # 72 DPIの場合: 842px x 595px
-        # 200 DPIの場合: 2339px x 1654px（pdf2imageのデフォルト）
-        # pdf2imageのデフォルトDPI（200）に合わせる
-        header_img_large.save(header_file_path, "PNG", dpi=(200, 200))
-        
-        # 画像URLを生成
-        base_parts = base.split(os.sep)
-        base_encoded = "/".join([quote(part, safe="") for part in base_parts])
-        image_url = f"/image/{base_encoded}/header.png"
+        # 頭紙はキャッシュに残さず、data URLで渡す
+        import io
+        import base64 as b64
+        buf = io.BytesIO()
+        header_img_large.save(buf, "PNG", dpi=(200, 200))
+        buf.seek(0)
+        image_url = "data:image/png;base64," + b64.b64encode(buf.read()).decode("ascii")
         
         # HTMLテンプレートで表示（画像サイズを渡す）
         return render_template("header.html", image_url=image_url, img_width=img_width, img_height=img_height)
@@ -1211,17 +1247,13 @@ def headers_batch():
             # 画像を2倍のサイズに拡大
             header_img_large = header_img.resize((img_width * 2, img_height * 2), Image.Resampling.LANCZOS)
             
-            # 画像をキャッシュディレクトリに保存
-            base, _ = os.path.splitext(decoded_filename)
-            cache_dir = os.path.join(CACHE_DIR, base)
-            os.makedirs(cache_dir, exist_ok=True)
-            header_file_path = os.path.join(cache_dir, "header.png")
-            header_img_large.save(header_file_path, "PNG", dpi=(200, 200))
-            
-            # 画像URLを生成
-            base_parts = base.split(os.sep)
-            base_encoded = "/".join([quote(part, safe="") for part in base_parts])
-            image_url = f"/image/{base_encoded}/header.png"
+            # 頭紙はキャッシュに残さず、data URLで渡す
+            import io
+            import base64 as b64
+            buf = io.BytesIO()
+            header_img_large.save(buf, "PNG", dpi=(200, 200))
+            buf.seek(0)
+            image_url = "data:image/png;base64," + b64.b64encode(buf.read()).decode("ascii")
             image_urls.append(image_url)
         
         if not image_urls:

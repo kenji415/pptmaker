@@ -497,6 +497,8 @@
 
     {% if not folders and not files %}
       <p>フォルダまたはPDFファイルが見つかりません。</p>
+      <p class="text-muted" style="margin-top: 8px;">参照先: <code>{{ pdf_dir }}</code></p>
+      <p class="text-muted" style="font-size: 0.9em;">X: ドライブが接続されているか、このパスにフォルダ・PDFがあるか確認してください。</p>
     {% endif %}
   </div>
 
