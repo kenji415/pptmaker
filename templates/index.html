@@ -473,10 +473,12 @@
         {% endif %}
       </div>
       <div class="toolbar-right">
+        {% if can_edit_files %}
         <label class="pdf-add-btn">
           PDF追加
           <input type="file" id="pdfUploadInput" accept=".pdf" onchange="uploadPdf(this)">
         </label>
+        {% endif %}
         <div class="search-box-wrapper">
           <div class="search-box">
             <span class="search-icon">🔍</span>
@@ -533,8 +535,10 @@
             </div>
             <div class="file-item-spacer"></div>
             <div class="file-item-buttons">
+              {% if can_edit_files %}
               <button class="file-action-btn rename-btn" onclick="event.stopPropagation(); openRenameModal(this);" data-file-path="{{ file_path_normalized | e }}" data-file-name="{{ file | e }}" title="名前を変更">名前変更</button>
               <button class="file-action-btn delete-file-btn" onclick="event.stopPropagation(); deleteFile(this);" data-file-path="{{ file_path_normalized | e }}" data-file-name="{{ file | e }}" title="削除">削除</button>
+              {% endif %}
             </div>
           </div>
         </li>

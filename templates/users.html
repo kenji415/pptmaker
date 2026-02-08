@@ -78,9 +78,17 @@
       background-color: #d1ecf1;
       color: #0c5460;
     }
+    .badge-editor {
+      background-color: #fff3cd;
+      color: #856404;
+    }
     .badge-user {
       background-color: #e7e7e7;
       color: #666;
+    }
+    .btn-small {
+      padding: 6px 12px;
+      font-size: 13px;
     }
     .message {
       padding: 12px;
@@ -121,7 +129,8 @@
       <thead>
         <tr>
           <th>ユーザー名</th>
-          <th>権限</th>
+          <th>アカウントの種類</th>
+          <th></th>
         </tr>
       </thead>
       <tbody>
@@ -129,11 +138,16 @@
         <tr>
           <td>{{ user.username }}</td>
           <td>
-            {% if user.is_admin %}
+            {% if user.role == 'admin' %}
               <span class="badge badge-admin">管理者</span>
+            {% elif user.role == 'editor' %}
+              <span class="badge badge-editor">修正者</span>
             {% else %}
-              <span class="badge badge-user">一般ユーザー</span>
+              <span class="badge badge-user">一般</span>
             {% endif %}
+          </td>
+          <td>
+            <a href="{{ url_for('edit_user', username=user.username) }}" class="btn btn-small">編集</a>
           </td>
         </tr>
         {% endfor %}

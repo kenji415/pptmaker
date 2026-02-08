@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ユーザー編集 - QS printer</title>
+  <style>
+    body { font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; margin: 0; padding: 20px; background-color: #f5f5f5; }
+    .container { max-width: 600px; margin: 0 auto; background: white; padding: 40px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+    h1 { color: #333; margin-bottom: 30px; }
+    .form-group { margin-bottom: 20px; }
+    label { display: block; margin-bottom: 5px; color: #666; font-weight: 500; }
+    input[type="text"], input[type="password"], select {
+      width: 100%; padding: 10px; border: 1px solid #ccc; border-radius: 4px; font-size: 14px; box-sizing: border-box;
+    }
+    input[readonly] { background: #f0f0f0; }
+    .button-group { display: flex; gap: 10px; margin-top: 30px; }
+    .btn { flex: 1; padding: 12px; border: none; border-radius: 4px; font-size: 16px; font-weight: 500; cursor: pointer; text-decoration: none; text-align: center; display: inline-block; }
+    .btn-primary { background-color: #0078d4; color: white; }
+    .btn-primary:hover { background-color: #106ebe; }
+    .btn-secondary { background-color: #6c757d; color: white; }
+    .btn-secondary:hover { background-color: #5a6268; }
+    .message { padding: 12px; margin-bottom: 20px; border-radius: 4px; }
+    .message.success { background-color: #d4edda; color: #155724; border: 1px solid #c3e6cb; }
+    .message.error { background-color: #f8d7da; color: #721c24; border: 1px solid #f5c6cb; }
+    .help-text { font-size: 13px; color: #666; margin-top: 5px; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>ユーザー編集</h1>
+    {% with messages = get_flashed_messages(with_categories=true) %}
+      {% if messages %}
+        {% for category, message in messages %}
+          <div class="message {{ category }}">{{ message }}</div>
+        {% endfor %}
+      {% endif %}
+    {% endwith %}
+
+    <form method="POST">
+      <div class="form-group">
+        <label for="username">ユーザー名</label>
+        <input type="text" id="username" name="username" value="{{ edit_username }}" readonly>
+      </div>
+
+      <div class="form-group">
+        <label for="role">アカウントの種類</label>
+        <select id="role" name="role">
+          <option value="user" {% if edit_role == 'user' %}selected{% endif %}>一般</option>
+          <option value="editor" {% if edit_role == 'editor' %}selected{% endif %}>修正者</option>
+          <option value="admin" {% if edit_role == 'admin' %}selected{% endif %}>管理者</option>
+        </select>
+        <div class="help-text">管理者：ユーザー管理・ファイル追加削除。修正者：ファイル追加・削除・リネーム。</div>
+      </div>
+
+      <div class="form-group">
+        <label for="password">パスワード（変更する場合のみ入力）</label>
+        <input type="password" id="password" name="password" placeholder="空欄のままなら変更しません">
+      </div>
+
+      <div class="button-group">
+        <button type="submit" class="btn btn-primary">更新</button>
+        <a href="{{ url_for('user_management') }}" class="btn btn-secondary">キャンセル</a>
+      </div>
+    </form>
+  </div>
+</body>
+</html>

@@ -89,28 +89,34 @@ def get_current_user():
     return session.get("username", "unknown")
 
 
+ROLE_ADMIN = "admin"
+ROLE_EDITOR = "editor"
+ROLE_USER = "user"
+
+
 def load_users():
-    """ユーザー情報を読み込む（パスワードハッシュと管理者フラグ）"""
+    """ユーザー情報を読み込む（パスワードハッシュとrole: admin/editor/user）"""
     users = {}
     if os.path.exists(USERS_FILE):
         try:
             with open(USERS_FILE, "r", encoding="utf-8") as f:
                 reader = csv.DictReader(f)
                 for row in reader:
-                    # ヘッダー行が存在し、必要なキーがあることを確認
                     if "username" in row and "password_hash" in row:
-                        is_admin = row.get("is_admin", "0").strip() == "1"
+                        role = (row.get("role") or "").strip().lower()
+                        if role not in (ROLE_ADMIN, ROLE_EDITOR, ROLE_USER):
+                            is_admin = row.get("is_admin", "0").strip() == "1"
+                            role = ROLE_ADMIN if is_admin else ROLE_USER
                         users[row["username"]] = {
                             "password_hash": row["password_hash"],
-                            "is_admin": is_admin
+                            "role": role
                         }
                     elif len(row) >= 2:
-                        # ヘッダー行がない場合のフォールバック（最初の列がusername、2番目がpassword_hash）
                         keys = list(row.keys())
                         if len(keys) >= 2:
                             users[row[keys[0]]] = {
                                 "password_hash": row[keys[1]],
-                                "is_admin": False
+                                "role": ROLE_USER
                             }
         except Exception as e:
             import traceback
@@ -119,19 +125,20 @@ def load_users():
     return users
 
 
-def save_user(username, password_hash, is_admin=False):
+def save_user(username, password_hash, role=ROLE_USER):
     """ユーザー情報を保存"""
+    if role not in (ROLE_ADMIN, ROLE_EDITOR, ROLE_USER):
+        role = ROLE_USER
     users = load_users()
     users[username] = {
         "password_hash": password_hash,
-        "is_admin": is_admin
+        "role": role
     }
-    
     with open(USERS_FILE, "w", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
-        writer.writerow(["username", "password_hash", "is_admin"])
+        writer.writerow(["username", "password_hash", "role"])
         for user, data in users.items():
-            writer.writerow([user, data["password_hash"], "1" if data["is_admin"] else "0"])
+            writer.writerow([user, data["password_hash"], data["role"]])
 
 
 def login_required(f):
@@ -150,23 +157,47 @@ def admin_required(f):
     def decorated_function(*args, **kwargs):
         if "username" not in session:
             return redirect(url_for("login"))
-        
         username = session.get("username")
         users = load_users()
-        if username not in users or not users[username]["is_admin"]:
+        if username not in users or users[username]["role"] != ROLE_ADMIN:
             flash("この機能を使用する権限がありません", "error")
             return redirect(url_for("index"))
         return f(*args, **kwargs)
     return decorated_function
 
 
+def editor_or_admin_required(f):
+    """ファイル追加・削除用：管理者または修正者必須"""
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        if "username" not in session:
+            return redirect(url_for("login"))
+        username = session.get("username")
+        users = load_users()
+        role = users.get(username, {}).get("role", ROLE_USER)
+        if role not in (ROLE_ADMIN, ROLE_EDITOR):
+            return jsonify({"success": False, "error": "ファイルの追加・削除は管理者または修正者のみ可能です"}), 403
+        return f(*args, **kwargs)
+    return decorated_function
+
+
 def is_current_user_admin():
-    """現在のユーザーが管理者かどうかを確認"""
+    """現在のユーザーが管理者かどうか"""
+    return _current_user_role() == ROLE_ADMIN
+
+
+def can_edit_files():
+    """現在のユーザーがファイル追加・削除・リネーム可能か（管理者または修正者）"""
+    return _current_user_role() in (ROLE_ADMIN, ROLE_EDITOR)
+
+
+def _current_user_role():
+    """現在のユーザーのroleを返す"""
     username = session.get("username")
     if not username:
-        return False
+        return ROLE_USER
     users = load_users()
-    return username in users and users[username]["is_admin"]
+    return users.get(username, {}).get("role", ROLE_USER)
 
 
 def load_printer_config():
@@ -786,6 +817,7 @@ def _resolve_upload_dir(folder_path):
 
 @app.route("/api/file/upload", methods=["POST"])
 @login_required
+@editor_or_admin_required
 def api_file_upload():
     """PDFファイルをアップロード（操作したフォルダに格納）"""
     folder_path = request.form.get("folder_path", "").strip()
@@ -819,6 +851,7 @@ def api_file_upload():
 
 @app.route("/api/file/rename", methods=["POST"])
 @login_required
+@editor_or_admin_required
 def api_file_rename():
     """PDFファイルをリネーム（実ファイルも変更）"""
     data = request.get_json()
@@ -855,6 +888,7 @@ def api_file_rename():
 
 @app.route("/api/file", methods=["DELETE"])
 @login_required
+@editor_or_admin_required
 def api_file_delete():
     """PDFファイルを削除（実ファイルも削除）"""
     data = request.get_json()
@@ -887,7 +921,9 @@ def login():
         users = load_users()
         if username in users and check_password_hash(users[username]["password_hash"], password):
             session["username"] = username
-            session["is_admin"] = users[username]["is_admin"]
+            role = users[username]["role"]
+            session["role"] = role
+            session["is_admin"] = (role == ROLE_ADMIN)
             return redirect(url_for("index"))
         else:
             flash("ユーザー名またはパスワードが正しくありません", "error")
@@ -900,6 +936,7 @@ def logout():
     """ログアウト"""
     session.pop("username", None)
     session.pop("is_admin", None)
+    session.pop("role", None)
     return redirect(url_for("login"))
 
 
@@ -908,7 +945,7 @@ def logout():
 def user_management():
     """ユーザー管理画面（管理者のみ）"""
     users = load_users()
-    user_list = [{"username": u, "is_admin": data["is_admin"]} for u, data in users.items()]
+    user_list = [{"username": u, "role": data["role"]} for u, data in users.items()]
     return render_template("users.html", users=user_list)
 
 
@@ -919,23 +956,45 @@ def add_user():
     if request.method == "POST":
         username = request.form.get("username", "").strip()
         password = request.form.get("password", "")
-        is_admin = request.form.get("is_admin") == "1"
-        
+        role = request.form.get("role", ROLE_USER).strip().lower()
+        if role not in (ROLE_ADMIN, ROLE_EDITOR, ROLE_USER):
+            role = ROLE_USER
         if not username or not password:
             flash("ユーザー名とパスワードを入力してください", "error")
             return render_template("add_user.html")
-        
         users = load_users()
         if username in users:
             flash("そのユーザー名は既に存在します", "error")
             return render_template("add_user.html")
-        
         password_hash = generate_password_hash(password)
-        save_user(username, password_hash, is_admin)
+        save_user(username, password_hash, role)
         flash(f"ユーザー '{username}' を追加しました", "success")
         return redirect(url_for("user_management"))
-    
     return render_template("add_user.html")
+
+
+@app.route("/users/<username>/edit", methods=["GET", "POST"])
+@admin_required
+def edit_user(username):
+    """ユーザー編集（管理者のみ・アカウント種類の変更）"""
+    users = load_users()
+    if username not in users:
+        flash("ユーザーが見つかりません", "error")
+        return redirect(url_for("user_management"))
+    if request.method == "POST":
+        role = request.form.get("role", ROLE_USER).strip().lower()
+        if role not in (ROLE_ADMIN, ROLE_EDITOR, ROLE_USER):
+            role = ROLE_USER
+        new_password = request.form.get("password", "")
+        current = users[username]
+        if new_password:
+            password_hash = generate_password_hash(new_password)
+        else:
+            password_hash = current["password_hash"]
+        save_user(username, password_hash, role)
+        flash(f"ユーザー '{username}' を更新しました", "success")
+        return redirect(url_for("user_management"))
+    return render_template("edit_user.html", edit_username=username, edit_role=users[username]["role"])
 
 
 @app.route("/")
@@ -1131,6 +1190,7 @@ def folder_view(folder_path=""):
         file_text_mappings=file_text_mappings,  # ファイルごとのテキスト対応情報
         username=session.get("username", "unknown"),
         is_admin=session.get("is_admin", False),
+        can_edit_files=can_edit_files(),
         pdf_dir=PDF_DIR,
     )
 
