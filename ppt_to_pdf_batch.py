@@ -1,14 +1,12 @@
 """
 PPTファイルの一括PDF化スクリプト
-- 指定パス内のPPTファイルを検索
+- 指定パス内および下位フォルダのPPTファイルを再帰的に検索
 - デスクトップの透かし.pngをスライドマスターの一枚目に追加
-- PPTタイトルをファイル名としてPDF化
-- 同一フォルダに保存（上書き可能）
+- ファイル名を基にPDF化し、各PPTが含まれるフォルダに保存
 """
 
 import os
 import sys
-import glob
 from pathlib import Path
 import win32com.client
 from win32com.client import constants
@@ -18,20 +16,12 @@ def get_desktop_path():
     return os.path.join(os.path.expanduser("~"), "Desktop")
 
 def find_ppt_files(target_path):
-    """指定パス内のPPT/PPTXファイルを検索"""
-    ppt_files = []
-    patterns = ["*.ppt", "*.pptx"]
-    
-    for pattern in patterns:
-        files = glob.glob(os.path.join(target_path, pattern))
-        ppt_files.extend(files)
-    
-    # 大文字小文字を区別しない検索も追加
-    for pattern in patterns:
-        files = glob.glob(os.path.join(target_path, pattern.upper()))
-        ppt_files.extend(files)
-    
-    return sorted(list(set(ppt_files)))
+    """指定パス内および下位フォルダのPPT/PPTXファイルを再帰的に検索"""
+    target = Path(target_path)
+    ppt_files = set()
+    for ext in ["*.ppt", "*.pptx", "*.PPT", "*.PPTX"]:
+        ppt_files.update(target.rglob(ext))
+    return sorted([str(p) for p in ppt_files])
 
 def get_ppt_title(presentation, ppt_path):
     """PPTファイルのタイトルを取得"""
@@ -113,8 +103,21 @@ def add_watermark_to_slide_master(presentation, watermark_path):
 
 def convert_ppt_to_pdf(ppt_path, pdf_path, watermark_path=None, powerpoint=None):
     """PPTファイルをPDFに変換"""
-    presentation = None
+    # PDFパスを先に決定し、既に同名PDFがある場合は何もせずスキップ
+    # （PPTを開く・透かしを入れるなどの重い処理の前に判断）
+    title = os.path.splitext(os.path.basename(ppt_path))[0]
+    invalid_chars = ['<', '>', ':', '"', '/', '\\', '|', '?', '*']
+    for char in invalid_chars:
+        title = title.replace(char, '_')
+    pdf_dir = os.path.dirname(ppt_path)
+    pdf_filename = f"{title}.pdf"
+    final_pdf_path = os.path.join(pdf_dir, pdf_filename)
     
+    if os.path.exists(final_pdf_path):
+        print(f"  同名のPDFが既に存在するためスキップします: {pdf_filename}")
+        return final_pdf_path
+    
+    presentation = None
     try:
         # PowerPointアプリケーションが渡されていない場合は新規作成
         if powerpoint is None:
@@ -136,24 +139,6 @@ def convert_ppt_to_pdf(ppt_path, pdf_path, watermark_path=None, powerpoint=None)
             print(f"  透かしを追加中...")
             if not add_watermark_to_slide_master(presentation, watermark_path):
                 print(f"  警告: 透かしの追加に失敗しましたが、処理を続行します")
-        
-        # PPTファイル名（拡張子なし）を取得してPDFファイル名として使用
-        title = os.path.splitext(os.path.basename(ppt_path))[0]
-        
-        # ファイル名に使用できない文字を置換
-        invalid_chars = ['<', '>', ':', '"', '/', '\\', '|', '?', '*']
-        for char in invalid_chars:
-            title = title.replace(char, '_')
-        
-        # PDFファイル名を決定（PPTファイル名と同じ）
-        pdf_dir = os.path.dirname(ppt_path)
-        pdf_filename = f"{title}.pdf"
-        final_pdf_path = os.path.join(pdf_dir, pdf_filename)
-        
-        # 既に同名のPDFがある場合は変換しない（スキップ）
-        if os.path.exists(final_pdf_path):
-            print(f"  同名のPDFが既に存在するためスキップします: {pdf_filename}")
-            return final_pdf_path
         
         # PDFとして保存
         print(f"  PDF化中: {pdf_filename}")
