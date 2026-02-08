@@ -160,15 +160,6 @@
       <span>ファイル: {{ filename }}</span>
     </div>
     <div>
-      生徒名:
-      <select id="student_name" onchange="updatePreview()" style="width:150px; padding: 4px 8px; border: 1px solid #ccc; border-radius: 4px; margin-right: 10px;">
-        <option value="">選択してください</option>
-        {% for student in students %}
-          <option value="{{ student.student_name }}" {% if selected_student_name == student.student_name %}selected{% endif %}>
-            {{ student.student_name }}{% if student.student_number %} ({{ student.student_number }}){% endif %}
-          </option>
-        {% endfor %}
-      </select>
       <button onclick="downloadPdf()" style="margin-right: 10px;">PDF保存</button>
       <button onclick="printNow()">印刷</button>
     </div>
@@ -212,20 +203,6 @@ document.querySelectorAll('img').forEach(function(img) {
   });
 });
 
-function updatePreview() {
-  // 生徒名が選択されたら、ページを再読み込みして画像を更新
-  const studentName = document.getElementById("student_name").value;
-  const currentUrl = new URL(window.location.href);
-  
-  if (studentName) {
-    currentUrl.searchParams.set("student_name", studentName);
-  } else {
-    currentUrl.searchParams.delete("student_name");
-  }
-  
-  window.location.href = currentUrl.toString();
-}
-
 function downloadPdf() {
   // PDFファイルをダウンロード
   const filename = "{{ filename|urlencode }}";
@@ -249,11 +226,9 @@ function printNow() {
   window.print();
 
   // ログをサーバーに送信（印刷ボタンを押した回数 = 1回）
-  const studentName = document.getElementById("student_name").value.trim() || "";
   const formData = new FormData();
   formData.append("filename", "{{ filename }}");
   formData.append("copies", "1");  // 印刷ボタンを押した回数として1回を記録
-  formData.append("student_name", studentName);
 
   fetch("/log_print", {
     method: "POST",

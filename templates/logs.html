@@ -99,7 +99,6 @@
           <th>ユーザー</th>
           <th>ファイル名</th>
           <th>部数</th>
-          <th>生徒名</th>
           <th>IPアドレス</th>
         </tr>
       </thead>
@@ -110,13 +109,12 @@
             <td>{{ log.get('user', '-') }}</td>
             <td>{{ log.get('filename', '-') }}</td>
             <td>{{ log.get('copies', '-') }}</td>
-            <td>{{ log.get('student_name', '-') }}</td>
             <td>{{ log.get('client_ip', '-') }}</td>
           </tr>
         {% endfor %}
         {% if not logs %}
           <tr>
-            <td colspan="6" style="text-align: center; padding: 20px;">ログがありません</td>
+            <td colspan="5" style="text-align: center; padding: 20px;">ログがありません</td>
           </tr>
         {% endif %}
       </tbody>

@@ -69,14 +69,12 @@ if not POPPLER_PATH:
             POPPLER_PATH = _p
             break
 USERS_FILE = os.path.join(BASE_DIR, "users.csv")
-STUDENTS_DIR = os.path.join(BASE_DIR, "students")
 TEXT_MAPPING_FILE = os.path.join(BASE_DIR, "text_mapping.csv")
 FILE_NAME_HISTORY_FILE = os.path.join(BASE_DIR, "file_name_history.csv")
 PRINT_ID_MAPPING_FILE = os.path.join(BASE_DIR, "print_id_mapping.csv")
 PRINTERS_CONFIG = os.path.join(BASE_DIR, "printers.yaml")
 
 # 必要なディレクトリを作成
-os.makedirs(STUDENTS_DIR, exist_ok=True)
 os.makedirs(CACHE_DIR, exist_ok=True)
 os.makedirs(os.path.dirname(LOG_FILE) if os.path.dirname(LOG_FILE) else ".", exist_ok=True)
 try:
@@ -437,7 +435,7 @@ def _draw_qr_on_image(img, filename, username, text_name, campus_name):
         print(f"ERROR: トレースバック:\n{traceback.format_exc()}")
 
 
-def pdf_to_images(filename, username=None, student_name=None, student_number=None, text_name=None, campus_name=None, include_qr=False):
+def pdf_to_images(filename, username=None, text_name=None, campus_name=None, include_qr=False):
     """PDFを画像に変換。テキストは1PDFあたり1キャッシュ（全員共有）。頭紙はキャッシュしない。"""
     filename = unquote(filename)
     base, ext = os.path.splitext(filename)
@@ -572,45 +570,6 @@ def get_all_pdf_files(subject_filter=""):
     
     scan_directory(PDF_DIR, "")
     return results
-
-
-def get_students_file(username):
-    """ユーザーごとの生徒ファイルパスを取得"""
-    return os.path.join(STUDENTS_DIR, f"{username}.csv")
-
-
-def load_students(username):
-    """ユーザーごとの生徒リストを読み込む"""
-    students = []
-    students_file = get_students_file(username)
-    
-    if os.path.exists(students_file):
-        try:
-            with open(students_file, "r", encoding="utf-8", newline="") as f:
-                reader = csv.DictReader(f)
-                for row in reader:
-                    students.append({
-                        "student_name": row.get("student_name", "").strip(),
-                        "student_number": row.get("student_number", "").strip()
-                    })
-        except Exception as e:
-            print(f"生徒データ読み込みエラー: {e}")
-    
-    return students
-
-
-def save_students(username, students):
-    """ユーザーごとの生徒リストを保存"""
-    students_file = get_students_file(username)
-    
-    with open(students_file, "w", encoding="utf-8", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=["student_name", "student_number"])
-        writer.writeheader()
-        for student in students:
-            writer.writerow({
-                "student_name": student["student_name"],
-                "student_number": student.get("student_number", "")
-            })
 
 
 def load_file_name_history():
@@ -1031,18 +990,6 @@ def view(filename):
         abort(404, description="PDFファイルが見つかりません")
 
     user = get_current_user()
-    
-    # 生徒データを取得
-    students = load_students(user)
-    
-    # クエリパラメータから生徒名を取得（選択された場合）
-    selected_student_name = request.args.get("student_name", "")
-    selected_student_number = ""
-    if selected_student_name:
-        for student in students:
-            if student["student_name"] == selected_student_name:
-                selected_student_number = student.get("student_number", "")
-                break
 
     # テキスト名を取得（PDFファイル名から拡張子を除く）
     text_name = os.path.splitext(os.path.basename(decoded_filename))[0]
@@ -1051,9 +998,7 @@ def view(filename):
         image_paths = pdf_to_images(
             filename,
             username=user,
-            student_name=selected_student_name if selected_student_name else None,
-            student_number=selected_student_number if selected_student_number else None,
-            text_name=text_name,  # 生徒名選択に関係なく常に渡す
+            text_name=text_name,
             campus_name=None,  # 通常のプレビューでは校舎情報は不要
             include_qr=False  # 通常のプレビューではQRコードは不要
         )
@@ -1082,8 +1027,6 @@ def view(filename):
         username=user,
         filename=decoded_filename,
         image_urls=image_urls,
-        students=students,
-        selected_student_name=selected_student_name,
         parent_folder_path=parent_folder_path,
         is_admin=session.get("is_admin", False)
     )
@@ -1363,7 +1306,6 @@ def log_print():
     user = get_current_user()
     filename = request.form.get("filename", "")
     copies = request.form.get("copies", "1")
-    student_name = request.form.get("student_name", "")
     client_ip = request.remote_addr or ""
 
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -1372,8 +1314,8 @@ def log_print():
     with open(LOG_FILE, "a", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
         if not file_exists:
-            writer.writerow(["printed_at", "user", "filename", "copies", "student_name", "client_ip"])
-        writer.writerow([now, user, filename, copies, student_name, client_ip])
+            writer.writerow(["printed_at", "user", "filename", "copies", "client_ip"])
+        writer.writerow([now, user, filename, copies, client_ip])
 
     return "OK"
 
@@ -1390,63 +1332,6 @@ def logs():
             log_entries.reverse()  # 新しい順に
     
     return render_template("logs.html", logs=log_entries, username=session.get("username", "unknown"), is_admin=session.get("is_admin", False))
-
-
-@app.route("/students", methods=["GET", "POST"])
-@login_required
-def students():
-    """生徒登録ページ"""
-    username = get_current_user()
-    
-    if request.method == "POST":
-        action = request.form.get("action", "add")
-        student_name = request.form.get("student_name", "").strip()
-        student_number = request.form.get("student_number", "").strip()
-        
-        if not student_name:
-            flash("生徒名を入力してください。", "error")
-            students_list = load_students(username)
-            return render_template("students.html", students=students_list, username=username, is_admin=session.get("is_admin", False))
-        
-        students_list = load_students(username)
-        
-        if action == "add":
-            # 重複チェック
-            if any(s["student_name"] == student_name for s in students_list):
-                flash(f"生徒「{student_name}」は既に登録されています。", "error")
-            else:
-                students_list.append({
-                    "student_name": student_name,
-                    "student_number": student_number
-                })
-                save_students(username, students_list)
-                flash(f"生徒「{student_name}」を登録しました。", "success")
-        
-        elif action == "edit":
-            # 既存の生徒を更新
-            found = False
-            for student in students_list:
-                if student["student_name"] == student_name:
-                    student["student_number"] = student_number
-                    found = True
-                    break
-            
-            if found:
-                save_students(username, students_list)
-                flash(f"生徒「{student_name}」を更新しました。", "success")
-            else:
-                flash(f"生徒「{student_name}」が見つかりません。", "error")
-        
-        elif action == "delete":
-            # 生徒を削除
-            original_name = request.form.get("student_name", "").strip()
-            students_list = [s for s in students_list if s["student_name"] != original_name]
-            save_students(username, students_list)
-            flash(f"生徒「{original_name}」を削除しました。", "success")
-    
-    # GETリクエストまたはPOST処理後の表示
-    students_list = load_students(username)
-    return render_template("students.html", students=students_list, username=username, is_admin=session.get("is_admin", False))
 
 
 @app.route("/logo")
