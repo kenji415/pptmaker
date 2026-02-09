@@ -849,6 +849,30 @@ def api_file_upload():
         return jsonify({"success": False, "error": str(e)}), 500
 
 
+@app.route("/api/file/replace", methods=["POST"])
+@login_required
+@editor_or_admin_required
+def api_file_replace():
+    """既存のPDFを新しいPDFで上書き。タグは引き継ぎ、キャッシュは削除して新規生成させる。"""
+    file_path = request.form.get("file_path", "").strip()
+    if "file" not in request.files:
+        return jsonify({"success": False, "error": "ファイルが指定されていません"}), 400
+    f = request.files["file"]
+    if not f or not f.filename:
+        return jsonify({"success": False, "error": "ファイルが指定されていません"}), 400
+    if not f.filename.lower().endswith(".pdf"):
+        return jsonify({"success": False, "error": "PDFファイルのみ差し替えできます"}), 400
+    target_full = _resolve_and_validate_pdf_path(file_path)
+    if not target_full or not os.path.exists(target_full):
+        return jsonify({"success": False, "error": "差し替え対象のファイルが見つかりません"}), 404
+    try:
+        f.save(target_full)
+        _clear_file_cache(file_path)
+        return jsonify({"success": True, "file_path": normalize_file_path(file_path)})
+    except OSError as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
 @app.route("/api/file/rename", methods=["POST"])
 @login_required
 @editor_or_admin_required

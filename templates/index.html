@@ -392,6 +392,12 @@
     .file-action-btn.delete-file-btn:hover {
       background: #c82333;
     }
+    .file-action-btn.replace-pdf-btn {
+      background: #0d6efd;
+    }
+    .file-action-btn.replace-pdf-btn:hover {
+      background: #0b5ed7;
+    }
     .search-box-wrapper {
       position: relative;
       width: 250px;
@@ -478,6 +484,7 @@
           PDF追加
           <input type="file" id="pdfUploadInput" accept=".pdf" onchange="uploadPdf(this)">
         </label>
+        <input type="file" id="pdfReplaceInput" accept=".pdf" style="display: none;" onchange="replacePdfSubmit(this)">
         {% endif %}
         <div class="search-box-wrapper">
           <div class="search-box">
@@ -536,6 +543,7 @@
             <div class="file-item-spacer"></div>
             <div class="file-item-buttons">
               {% if can_edit_files %}
+              <button class="file-action-btn replace-pdf-btn" onclick="event.stopPropagation(); replacePdf(this);" data-file-path="{{ file_path_normalized | e }}" data-file-name="{{ file | e }}" title="PDFを差し替え（タグは維持、キャッシュは再生成）">PDF編集</button>
               <button class="file-action-btn rename-btn" onclick="event.stopPropagation(); openRenameModal(this);" data-file-path="{{ file_path_normalized | e }}" data-file-name="{{ file | e }}" title="名前を変更">名前変更</button>
               <button class="file-action-btn delete-file-btn" onclick="event.stopPropagation(); deleteFile(this);" data-file-path="{{ file_path_normalized | e }}" data-file-name="{{ file | e }}" title="削除">削除</button>
               {% endif %}
@@ -605,6 +613,38 @@
     let currentMappings = [];
     let renameFilePath = '';
     let renameFileName = '';
+    let replaceFilePath = '';
+    let replaceFileName = '';
+
+    function replacePdf(btn) {
+      replaceFilePath = btn.dataset.filePath || '';
+      replaceFileName = btn.dataset.fileName || '';
+      if (!replaceFilePath) return;
+      document.getElementById('pdfReplaceInput').click();
+    }
+
+    function replacePdfSubmit(inputEl) {
+      const file = inputEl.files?.[0];
+      inputEl.value = '';
+      if (!file || !replaceFilePath) return;
+      const formData = new FormData();
+      formData.append('file', file);
+      formData.append('file_path', replaceFilePath);
+      fetch('/api/file/replace', {
+        method: 'POST',
+        body: formData
+      })
+      .then(response => response.json())
+      .then(data => {
+        if (data.success) {
+          alert('PDFを差し替えました。タグはそのまま、表示用キャッシュは次回表示時に再生成されます。');
+          location.reload();
+        } else {
+          alert('差し替えに失敗しました: ' + (data.error || '不明なエラー'));
+        }
+      })
+      .catch(() => alert('差し替えに失敗しました。'));
+    }
 
     function uploadPdf(inputEl) {
       const file = inputEl.files?.[0];
