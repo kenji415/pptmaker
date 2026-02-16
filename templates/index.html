@@ -609,6 +609,58 @@
     const fileTextMappings = {{ file_text_mappings | tojson }};
     const currentFolderPath = document.getElementById('toolbarEl')?.dataset?.currentFolder || '';
     let currentFilePath = '';
+
+    // スクロール復元デバッグ: 原因特定用。不要になったら false にしてください
+    var SCROLL_DEBUG = false;
+
+    // プレビューから戻ったときのスクロール復元（描画前にすぐ実行してぬるっと感を防ぐ）
+    function restoreListScroll() {
+      try {
+        var raw = sessionStorage.getItem('printviewer_list_scroll');
+        if (SCROLL_DEBUG) console.log('[scroll復元] 開始', { raw: raw });
+        if (!raw) return;
+        var data = JSON.parse(raw);
+        var toolbar = document.getElementById('toolbarEl');
+        var current = (toolbar && toolbar.dataset.currentFolder) || '';
+        if (SCROLL_DEBUG) console.log('[scroll復元] 比較', { savedFolder: data.folderPath, currentFolder: current, match: data.folderPath === current });
+        if (data.folderPath !== current) return;
+        sessionStorage.removeItem('printviewer_list_scroll');
+        var y = parseInt(data.scrollY, 10);
+        if (isNaN(y) || y < 0) return;
+        if (SCROLL_DEBUG) console.log('[scroll復元] scrollTo(0, ' + y + ') を実行');
+        window.scrollTo(0, y);
+        requestAnimationFrame(function () { window.scrollTo(0, y); });
+      } catch (e) {
+        if (SCROLL_DEBUG) console.log('[scroll復元] エラー', e);
+      }
+    }
+    restoreListScroll();
+
+    // プレビューへ遷移する直前にスクロール位置を保存（キャプチャで先に実行）
+    document.addEventListener('DOMContentLoaded', function () {
+      var container = document.querySelector('.container');
+      if (!container) return;
+      container.addEventListener('click', function (e) {
+        var a = e.target && e.target.closest && e.target.closest('a[href*="/view/"]');
+        if (!a) {
+          var fn = e.target && e.target.closest && e.target.closest('.file-item-filename');
+          if (fn) a = fn.querySelector('a[href*="/view/"]');
+        }
+        if (!a || !a.href || a.href.indexOf('/view/') === -1) return;
+        var folderPath = (document.getElementById('toolbarEl') && document.getElementById('toolbarEl').dataset.currentFolder) || '';
+        try {
+          var scrollY = window.scrollY;
+          sessionStorage.setItem('printviewer_list_scroll', JSON.stringify({
+            folderPath: folderPath,
+            scrollY: scrollY
+          }));
+          if (SCROLL_DEBUG) console.log('[scroll保存] 保存した', { folderPath: folderPath, scrollY: scrollY });
+        } catch (err) {
+          if (SCROLL_DEBUG) console.log('[scroll保存] エラー', err);
+        }
+      }, true);
+    });
+
     let currentFileName = '';
     let currentMappings = [];
     let renameFilePath = '';
