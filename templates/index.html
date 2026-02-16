@@ -259,6 +259,23 @@
     .add-text-btn:hover {
       background: #005a9e;
     }
+    .file-preview-tooltip {
+      position: fixed;
+      z-index: 1100;
+      display: none;
+      background: white;
+      border: 1px solid #ccc;
+      border-radius: 6px;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+      padding: 4px;
+      pointer-events: none;
+    }
+    .file-preview-tooltip img {
+      display: block;
+      max-width: 700px;
+      height: auto;
+      vertical-align: bottom;
+    }
     .modal {
       display: none;
       position: fixed;
@@ -553,6 +570,10 @@
       {% endfor %}
     </ul>
 
+    <div id="filePreviewTooltip" class="file-preview-tooltip" aria-hidden="true">
+      <img src="" alt="プレビュー">
+    </div>
+
     <!-- テキスト対応追加モーダル -->
     <div id="textMappingModal" class="modal">
       <div class="modal-content">
@@ -660,6 +681,45 @@
         }
       }, true);
     });
+
+    (function initFilePreviewTooltip() {
+      var fileList = document.querySelector('.file-list');
+      var tooltip = document.getElementById('filePreviewTooltip');
+      var tooltipImg = tooltip && tooltip.querySelector('img');
+      if (!fileList || !tooltipImg) return;
+      var previewTimeoutId = null;
+      var PREVIEW_DELAY_MS = 300;
+      function isInsideFileRow(node) {
+        return node && node.closest && node.closest('li.file-icon');
+      }
+      fileList.addEventListener('mouseover', function (e) {
+        var li = e.target.closest && e.target.closest('li.file-icon');
+        if (!li) return;
+        var path = li.getAttribute('data-file-path');
+        if (!path) return;
+        if (previewTimeoutId) clearTimeout(previewTimeoutId);
+        var clientX = e.clientX;
+        var clientY = e.clientY;
+        previewTimeoutId = setTimeout(function () {
+          previewTimeoutId = null;
+          var url = '/preview/' + encodeURIComponent(path);
+          tooltipImg.src = url;
+          tooltip.style.left = (clientX + 15) + 'px';
+          tooltip.style.top = (clientY + 15) + 'px';
+          tooltip.style.display = 'block';
+        }, PREVIEW_DELAY_MS);
+      }, true);
+      fileList.addEventListener('mouseout', function (e) {
+        var stillInside = isInsideFileRow(e.relatedTarget);
+        if (stillInside) return;
+        if (previewTimeoutId) {
+          clearTimeout(previewTimeoutId);
+          previewTimeoutId = null;
+        }
+        tooltip.style.display = 'none';
+        tooltipImg.src = '';
+      }, true);
+    })();
 
     let currentFileName = '';
     let currentMappings = [];

@@ -1,3 +1,4 @@
+import io
 import os
 import csv
 import re
@@ -1513,6 +1514,43 @@ def image(base, img_name):
         abort(404)
 
     return send_file(img_path, mimetype="image/png")
+
+
+@app.route("/preview/<path:filename>")
+@login_required
+def preview_first_page(filename):
+    """PDFの1枚目を小さめの画像で返す（一覧のホバープレビュー用）。既存キャッシュを利用。"""
+    if ".." in filename or filename.startswith("\\") or filename.startswith("/"):
+        abort(400)
+    decoded_filename = unquote(filename)
+    pdf_path = os.path.join(PDF_DIR, decoded_filename)
+    if not os.path.exists(pdf_path):
+        abort(404)
+    try:
+        image_paths = pdf_to_images(
+            decoded_filename,
+            username=None,
+            text_name=None,
+            campus_name=None,
+            include_qr=False,
+        )
+    except Exception as e:
+        return f"プレビュー生成エラー: {e}", 500
+    if not image_paths:
+        abort(404)
+    first_path = image_paths[0]
+    img = Image.open(first_path).convert("RGB")
+    w, h = img.size
+    max_w = 700
+    if w > max_w:
+        ratio = max_w / w
+        new_w = max_w
+        new_h = max(1, int(h * ratio))
+        img = img.resize((new_w, new_h), Image.Resampling.LANCZOS)
+    buf = io.BytesIO()
+    img.save(buf, "PNG")
+    buf.seek(0)
+    return send_file(buf, mimetype="image/png")
 
 
 @app.route("/download/<path:filename>")
