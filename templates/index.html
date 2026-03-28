@@ -675,6 +675,12 @@
             folderPath: folderPath,
             scrollY: scrollY
           }));
+          var searchInputEl = document.getElementById('searchInput');
+          var searchKeyword = (searchInputEl && searchInputEl.value) ? searchInputEl.value : '';
+          sessionStorage.setItem('printviewer_list_search', JSON.stringify({
+            folderPath: folderPath,
+            keyword: searchKeyword
+          }));
           if (SCROLL_DEBUG) console.log('[scroll保存] 保存した', { folderPath: folderPath, scrollY: scrollY });
         } catch (err) {
           if (SCROLL_DEBUG) console.log('[scroll保存] エラー', err);
@@ -1038,6 +1044,28 @@
         el.classList.remove('search-hidden');
       });
     }
+
+    // プレビューから戻ったとき検索窓と絞り込みを復元
+    (function restoreListSearch() {
+      try {
+        var raw = sessionStorage.getItem('printviewer_list_search');
+        if (!raw) return;
+        var data = JSON.parse(raw);
+        var toolbar = document.getElementById('toolbarEl');
+        var current = (toolbar && toolbar.dataset.currentFolder) || '';
+        if (data.folderPath !== current) return;
+        sessionStorage.removeItem('printviewer_list_search');
+        var input = document.getElementById('searchInput');
+        if (!input) return;
+        var kw = (data.keyword != null ? String(data.keyword) : '').trim();
+        input.value = kw;
+        if (kw) {
+          performSearch(kw);
+        } else {
+          removeSearchFilter();
+        }
+      } catch (e) {}
+    })();
 
   </script>
 </body>
