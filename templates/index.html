@@ -817,13 +817,14 @@
     function deleteFile(btn) {
       const filePath = btn.dataset.filePath || '';
       const fileName = btn.dataset.fileName || '';
-      if (!confirm('「' + fileName + '」を削除しますか？\n※PDFファイルもディスクから削除されます。')) {
+      if (!confirm('「' + fileName + '」を削除しますか？\n※PDFファイルはディスクから削除されます。')) {
         return;
       }
+      const deleteRelatedPpt = confirm('同名のPowerPoint（.ppt / .pptx）も削除しますか？\n※同じフォルダ内の同名ファイルのみ対象です。');
       fetch('/api/file', {
         method: 'DELETE',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ file_path: filePath })
+        body: JSON.stringify({ file_path: filePath, delete_related_ppt: deleteRelatedPpt })
       })
       .then(response => response.json())
       .then(data => {

@@ -918,20 +918,32 @@ def api_file_delete():
     """PDFファイルを削除（実ファイルも削除）"""
     data = request.get_json()
     file_path = data.get("file_path", "").strip()
+    delete_related_ppt = bool(data.get("delete_related_ppt", False))
     if not file_path:
         return jsonify({"success": False, "error": "file_path が必要です"}), 400
     full = _resolve_and_validate_pdf_path(file_path)
     if not full or not os.path.exists(full):
         return jsonify({"success": False, "error": "ファイルが見つかりません"}), 404
     try:
+        deleted_files = []
         os.remove(full)
+        deleted_files.append(normalize_file_path(file_path))
+        deleted_related = []
+        if delete_related_ppt:
+            base_no_ext, _ext = os.path.splitext(full)
+            for ext in (".ppt", ".pptx"):
+                p = base_no_ext + ext
+                if os.path.exists(p):
+                    os.remove(p)
+                    rel = os.path.relpath(p, PDF_DIR)
+                    deleted_related.append(normalize_file_path(rel))
         _clear_file_cache(file_path)
         mappings = load_text_mappings()
         norm = normalize_file_path(file_path)
         if norm in mappings:
             del mappings[norm]
             save_text_mappings(mappings)
-        return jsonify({"success": True})
+        return jsonify({"success": True, "deleted": deleted_files, "deleted_related": deleted_related})
     except OSError as e:
         return jsonify({"success": False, "error": str(e)}), 500
 
