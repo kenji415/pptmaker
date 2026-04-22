@@ -204,23 +204,35 @@
     }
     .file-item-filename {
       flex-shrink: 0;
+      max-width: 240px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
     }
     .file-item-filename a {
       text-decoration: none;
       color: #0078d4;
       white-space: nowrap;
+      display: inline-block;
+      max-width: 100%;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .file-item-filename a.needs-fix {
+      color: #dc3545;
+      font-weight: 700;
     }
     .file-text-mapping {
       color: #666;
       font-size: 12px;
       display: flex;
-      flex-wrap: wrap;
+      flex-wrap: nowrap;
       gap: 6px;
       align-items: center;
-      width: 140px;
-      max-height: 24px;
+      flex: 1;
+      min-width: 0;
       overflow: hidden;
-      flex-shrink: 0;
+      white-space: nowrap;
     }
     .file-item-spacer {
       flex: 1;
@@ -233,6 +245,12 @@
       font-size: 11px;
       white-space: nowrap;
       flex-shrink: 0;
+    }
+    .file-text-mapping-item.needs-fix {
+      background: #fff0f1;
+      border: 1px solid #f5c2c7;
+      color: #b02a37;
+      font-weight: 700;
     }
     .file-item-buttons {
       display: flex;
@@ -333,6 +351,24 @@
       border-radius: 4px;
       box-sizing: border-box;
     }
+    .needs-fix-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-top: -8px;
+      margin-bottom: 15px;
+    }
+    .needs-fix-row input[type="checkbox"] {
+      width: auto;
+      margin: 0;
+    }
+    .needs-fix-label {
+      display: inline;
+      margin: 0;
+      font-weight: 600;
+      cursor: pointer;
+      user-select: none;
+    }
     .form-actions {
       display: flex;
       justify-content: flex-end;
@@ -365,12 +401,24 @@
     }
     .text-mapping-list-item {
       display: flex;
-      justify-content: space-between;
       align-items: center;
+      gap: 8px;
       padding: 8px;
       background: #f9f9f9;
       margin-bottom: 8px;
       border-radius: 4px;
+    }
+    .text-mapping-label {
+      flex: 1;
+      min-width: 0;
+      word-break: break-word;
+    }
+    .text-mapping-actions {
+      margin-left: auto;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      flex-shrink: 0;
     }
     .delete-mapping-btn {
       background: #dc3545;
@@ -540,21 +588,28 @@
           {% set file_url = '/view/' + encoded_files[loop.index0] %}
           {% set file_path = file %}
         {% endif %}
+        {% set file_display = file[:-4] if file.lower().endswith('.pdf') else file %}
         {% set file_path_normalized = file_path.replace('\\', '/') %}
         {% if file_text_mappings %}
           {% set mappings = file_text_mappings.get(file, []) %}
         {% else %}
           {% set mappings = [] %}
         {% endif %}
+        {% set needs_fix_any = (mappings | selectattr('needs_fix') | list | length) > 0 %}
         <li class="file-icon" data-file-path="{{ file_path_normalized }}">
           <div class="file-item">
             <div class="file-item-filename" onclick="window.location.href='{{ file_url }}'">
-              <a href="{{ file_url }}">{{ file }}</a>
+              <a href="{{ file_url }}"{% if needs_fix_any %} class="needs-fix"{% endif %}>{{ file_display }}</a>
             </div>
-            <button class="add-text-btn" onclick="event.stopPropagation(); openTextMappingModal('{{ file_path_normalized }}', '{{ file }}');" title="テキスト対応を追加">+</button>
+            {% if session.get('role') in ['admin','editor'] %}
+            <button class="add-text-btn" onclick="event.stopPropagation(); openTextMappingModal('{{ file_path_normalized }}', '{{ file_display | e }}', '{{ file | e }}');" title="テキスト対応を追加">+</button>
+            {% endif %}
             <div class="file-text-mapping">
-              {% for mapping in mappings %}
-                <span class="file-text-mapping-item">{{ mapping.juku_name }}{% if mapping.text_name %}:{{ mapping.text_name }}{% endif %}</span>
+              {% for mapping in mappings if mapping.needs_fix %}
+                <span class="file-text-mapping-item needs-fix">{{ mapping.juku_name }}{% if mapping.text_name %}:{{ mapping.text_name }}{% endif %}{% if mapping.commenter %}（{{ mapping.commenter }}）{% endif %}</span>
+              {% endfor %}
+              {% for mapping in mappings if not mapping.needs_fix %}
+                <span class="file-text-mapping-item">{{ mapping.juku_name }}{% if mapping.text_name %}:{{ mapping.text_name }}{% endif %}{% if mapping.commenter %}（{{ mapping.commenter }}）{% endif %}</span>
               {% endfor %}
             </div>
             <div class="file-item-spacer"></div>
@@ -591,9 +646,15 @@
             <label>タグ（塾テキスト名・単元名・学校名など）:</label>
             <input type="text" id="modalTag" placeholder="例: SAPIX 61-01数の性質、開成中学">
           </div>
+          <div class="needs-fix-row">
+            <input type="checkbox" id="modalNeedsFix">
+            <label class="needs-fix-label" for="modalNeedsFix">要修正</label>
+            <input type="checkbox" id="modalFixDone">
+            <label class="needs-fix-label" for="modalFixDone">修正完了</label>
+          </div>
           <div class="form-actions">
             <button class="btn btn-secondary" onclick="closeTextMappingModal()">キャンセル</button>
-            <button class="btn btn-primary" onclick="addTextMapping()">追加</button>
+            <button class="btn btn-primary" id="modalSubmitBtn" onclick="submitTextMapping()">追加</button>
           </div>
           <div class="text-mapping-list" id="existingMappings"></div>
         </div>
@@ -844,13 +905,18 @@
       .catch(() => alert('削除に失敗しました。'));
     }
 
-    function openTextMappingModal(filePath, fileName) {
+    function openTextMappingModal(filePath, fileDisplayName, fileKeyName) {
       currentFilePath = filePath;
-      currentFileName = fileName;
-      document.getElementById('modalFileName').value = fileName;
+      currentFileName = fileDisplayName;
+      document.getElementById('modalFileName').value = fileDisplayName;
       document.getElementById('modalTag').value = '';
+      const needsFixEl = document.getElementById('modalNeedsFix');
+      if (needsFixEl) needsFixEl.checked = false;
+      const fixDoneEl = document.getElementById('modalFixDone');
+      if (fixDoneEl) fixDoneEl.checked = false;
+      startEditMode(false);
       document.getElementById('textMappingModal').style.display = 'block';
-      loadExistingMappings(fileName);
+      loadExistingMappings(fileKeyName);
     }
 
     function closeTextMappingModal() {
@@ -860,6 +926,7 @@
     function loadExistingMappings(fileName) {
       // 現在のページからマッピング情報を取得
       currentMappings = fileTextMappings[fileName] || [];
+      const role = "{{ session.get('role','user') }}";
       
       const container = document.getElementById('existingMappings');
       if (currentMappings.length === 0) {
@@ -868,37 +935,123 @@
       }
       
       container.innerHTML = '<div style="margin-bottom: 10px; font-weight: 500;">既存のタグ:</div>';
-      currentMappings.forEach((mapping) => {
+      // 要修正を先頭に表示
+      const sortedMappings = currentMappings.slice().sort((a, b) => {
+        const af = !!a.needs_fix;
+        const bf = !!b.needs_fix;
+        if (af === bf) return 0;
+        return af ? -1 : 1;
+      });
+
+      sortedMappings.forEach((mapping) => {
         const item = document.createElement('div');
         item.className = 'text-mapping-list-item';
         const tagDisplay = mapping.text_name ? mapping.juku_name + ':' + mapping.text_name : mapping.juku_name;
+        const commenter = (mapping.commenter || '').trim();
+        const needsFix = !!mapping.needs_fix;
+        const needsFixPrefix = needsFix ? '【要修正】' : '';
+        const displayWithCommenter = needsFixPrefix + (commenter ? (tagDisplay + '（' + commenter + '）') : tagDisplay);
         const jukuName = (mapping.juku_name || '').replace(/\\/g, '\\\\').replace(/'/g, "\\'");
         const textName = (mapping.text_name || '').replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+        const canEdit = (role === 'admin') || (role === 'editor' && !!mapping.is_fix_tag);
+        const canDelete = (role === 'admin');
+        const editBtnHtml = canEdit ? `<button class="delete-mapping-btn" style="background:#6c757d;" onclick="editTextMapping('${jukuName}', '${textName}')">編集</button>` : ``;
+        const deleteBtnHtml = canDelete ? `<button class="delete-mapping-btn" onclick="deleteTextMapping('${jukuName}', '${textName}')">削除</button>` : ``;
         item.innerHTML = `
-          <span>${tagDisplay.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</span>
-          <button class="delete-mapping-btn" onclick="deleteTextMapping('${jukuName}', '${textName}')">削除</button>
+          <span class="text-mapping-label" style="${needsFix ? 'color:#b02a37;font-weight:700;' : ''}">${displayWithCommenter.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</span>
+          <div class="text-mapping-actions">
+            ${editBtnHtml}
+            ${deleteBtnHtml}
+          </div>
         `;
         container.appendChild(item);
       });
     }
 
-    function addTextMapping() {
+    let editingTag = null; // { juku_name, text_name }
+
+    function startEditMode(isEditing, mapping) {
+      const btn = document.getElementById('modalSubmitBtn');
+      if (btn) btn.textContent = isEditing ? '更新' : '追加';
+      editingTag = isEditing ? { juku_name: mapping.juku_name || '', text_name: mapping.text_name || '' } : null;
+    }
+
+    function syncFixCheckboxes() {
+      const needsFixEl = document.getElementById('modalNeedsFix');
+      const fixDoneEl = document.getElementById('modalFixDone');
+      if (!needsFixEl || !fixDoneEl) return;
+      // どちらか一方だけON（擬似ラジオボタン）
+      if (needsFixEl.checked && fixDoneEl.checked) {
+        // 両方ONになった場合は修正完了優先
+        needsFixEl.checked = false;
+      } else if (needsFixEl.checked) {
+        fixDoneEl.checked = false;
+      } else if (fixDoneEl.checked) {
+        needsFixEl.checked = false;
+      }
+    }
+
+    function getNeedsFixFromModal() {
+      const needsFixEl = document.getElementById('modalNeedsFix');
+      const fixDoneEl = document.getElementById('modalFixDone');
+      if (fixDoneEl?.checked) return false;
+      return !!needsFixEl?.checked;
+    }
+
+    document.addEventListener('change', function (e) {
+      if (e.target && (e.target.id === 'modalNeedsFix' || e.target.id === 'modalFixDone')) {
+        // チェックした側を優先してもう片方を外す
+        if (e.target.id === 'modalNeedsFix' && e.target.checked) {
+          const fixDoneEl = document.getElementById('modalFixDone');
+          if (fixDoneEl) fixDoneEl.checked = false;
+        }
+        if (e.target.id === 'modalFixDone' && e.target.checked) {
+          const needsFixEl = document.getElementById('modalNeedsFix');
+          if (needsFixEl) needsFixEl.checked = false;
+        }
+        syncFixCheckboxes();
+      }
+    });
+
+    function submitTextMapping() {
       const tag = document.getElementById('modalTag').value.trim();
+      const needsFix = getNeedsFixFromModal();
+      const needsFixEl = document.getElementById('modalNeedsFix');
+      const fixDoneEl = document.getElementById('modalFixDone');
+      const isFixTag = !!(needsFixEl?.checked || fixDoneEl?.checked);
+      const role = "{{ session.get('role','user') }}";
       
       if (!tag) {
         alert('タグを入力してください。');
         return;
       }
+      if (role === 'editor' && !isFixTag) {
+        alert('修正者は「要修正」または「修正完了」を選んでください。');
+        return;
+      }
+
+      const isEditing = !!editingTag;
+      const method = isEditing ? 'PUT' : 'POST';
+      const body = isEditing
+        ? {
+            file_path: currentFilePath,
+            juku_name: editingTag.juku_name,
+            text_name: editingTag.text_name || '',
+            new_tag: tag,
+            needs_fix: needsFix,
+            is_fix_tag: isFixTag
+          }
+        : {
+            file_path: currentFilePath,
+            tag: tag,
+            needs_fix: needsFix,
+            is_fix_tag: isFixTag
+          };
 
       fetch('/api/text-mapping', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          file_path: currentFilePath,
-          tag: tag
-        })
+        method,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
       })
       .then(response => response.json())
       .then(data => {
@@ -943,6 +1096,21 @@
         console.error('Error:', error);
         alert('削除に失敗しました。');
       });
+    }
+
+    function editTextMapping(jukuName, textName) {
+      const display = textName ? jukuName + ':' + textName : jukuName;
+      const mapping = (currentMappings || []).find(m => (m.juku_name || '') === jukuName && ((m.text_name || '') === (textName || '')));
+      document.getElementById('modalTag').value = display;
+      const needsFixEl = document.getElementById('modalNeedsFix');
+      const fixDoneEl = document.getElementById('modalFixDone');
+      const isFixTag = !!(mapping && mapping.is_fix_tag);
+      const isNeedsFix = !!(mapping && mapping.needs_fix);
+      if (needsFixEl) needsFixEl.checked = isFixTag ? isNeedsFix : false;
+      if (fixDoneEl) fixDoneEl.checked = isFixTag ? !isNeedsFix : false;
+      syncFixCheckboxes();
+      startEditMode(true, { juku_name: jukuName, text_name: textName || '' });
+      document.getElementById('textMappingModal').style.display = 'block';
     }
 
     // モーダルの外側をクリックしたら閉じる

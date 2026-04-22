@@ -686,7 +686,7 @@ def find_mappings_by_folder_and_index(folder_path, file_index, text_mappings, al
 
 def load_text_mappings():
     """テキスト対応情報を読み込む（正規化されたパスでマッピング）"""
-    mappings = {}  # {file_path: [{"juku_name": "...", "text_name": "..."}, ...]}
+    mappings = {}  # {file_path: [{"juku_name": "...", "text_name": "...", "commenter": "...", "needs_fix": bool, "is_fix_tag": bool}, ...]}
     if os.path.exists(TEXT_MAPPING_FILE):
         with open(TEXT_MAPPING_FILE, "r", encoding="utf-8") as f:
             reader = csv.DictReader(f)
@@ -696,11 +696,23 @@ def load_text_mappings():
                 normalized_path = normalize_file_path(file_path)
                 juku_name = row["juku_name"]
                 text_name = row["text_name"]
+                commenter = row.get("commenter", "")
+                needs_fix_raw = (row.get("needs_fix", "") or "").strip().lower()
+                needs_fix = needs_fix_raw in ("1", "true", "yes", "y", "on")
+                is_fix_tag_raw = (row.get("is_fix_tag", "") or "").strip().lower()
+                if is_fix_tag_raw == "":
+                    # 旧形式: needs_fix が true のものは fix系として扱う
+                    is_fix_tag = bool(needs_fix)
+                else:
+                    is_fix_tag = is_fix_tag_raw in ("1", "true", "yes", "y", "on")
                 if normalized_path not in mappings:
                     mappings[normalized_path] = []
                 mappings[normalized_path].append({
                     "juku_name": juku_name,
-                    "text_name": text_name
+                    "text_name": text_name,
+                    "commenter": commenter,
+                    "needs_fix": needs_fix,
+                    "is_fix_tag": is_fix_tag,
                 })
     return mappings
 
@@ -708,18 +720,21 @@ def load_text_mappings():
 def save_text_mappings(mappings):
     """テキスト対応情報を保存"""
     with open(TEXT_MAPPING_FILE, "w", encoding="utf-8", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=["file_path", "juku_name", "text_name"])
+        writer = csv.DictWriter(f, fieldnames=["file_path", "juku_name", "text_name", "commenter", "needs_fix", "is_fix_tag"])
         writer.writeheader()
         for file_path, items in mappings.items():
             for item in items:
                 writer.writerow({
                     "file_path": file_path,
                     "juku_name": item["juku_name"],
-                    "text_name": item["text_name"]
+                    "text_name": item["text_name"],
+                    "commenter": item.get("commenter", ""),
+                    "needs_fix": "1" if item.get("needs_fix") else "0",
+                    "is_fix_tag": "1" if item.get("is_fix_tag") else "0",
                 })
 
 
-def add_text_mapping(file_path, juku_name, text_name):
+def add_text_mapping(file_path, juku_name, text_name, commenter="", needs_fix=False, is_fix_tag=False):
     """テキスト対応情報を追加"""
     mappings = load_text_mappings()
     if file_path not in mappings:
@@ -730,7 +745,10 @@ def add_text_mapping(file_path, juku_name, text_name):
             return  # 既に存在する場合は追加しない
     mappings[file_path].append({
         "juku_name": juku_name,
-        "text_name": text_name
+        "text_name": text_name,
+        "commenter": commenter or "",
+        "needs_fix": bool(needs_fix),
+        "is_fix_tag": bool(is_fix_tag),
     })
     save_text_mappings(mappings)
 
@@ -898,7 +916,28 @@ def api_file_rename():
     if os.path.exists(dst_full):
         return jsonify({"success": False, "error": "同名のファイルが既に存在します"}), 400
     try:
+        # 同名の PowerPoint もあれば一緒にリネーム（pptx優先で存在確認、両方あれば両方）
+        src_base, _ = os.path.splitext(src_full)
+        dst_base, _ = os.path.splitext(dst_full)
+        related_exts = (".pptx", ".ppt")
+        related_moves = []  # [(src, dst), ...]
+        for ext in related_exts:
+            s = src_base + ext
+            if not os.path.exists(s):
+                continue
+            d = dst_base + ext
+            if os.path.exists(d):
+                return jsonify({"success": False, "error": f"同名のファイルが既に存在します: {os.path.basename(d)}"}), 400
+            related_moves.append((s, d))
+
+        # 実行（失敗時は可能な範囲でロールバック）
+        performed = []
         os.rename(src_full, dst_full)
+        performed.append((dst_full, src_full))
+        for s, d in related_moves:
+            os.rename(s, d)
+            performed.append((d, s))
+
         _rename_file_cache(file_path, new_relative)
         update_text_mapping_path(file_path, new_relative)
         history = load_file_name_history()
@@ -908,6 +947,13 @@ def api_file_rename():
         save_file_name_history(history)
         return jsonify({"success": True, "new_path": new_relative})
     except OSError as e:
+        # ロールバック（ベストエフォート）
+        try:
+            for dst, src in reversed(performed):
+                if os.path.exists(dst) and not os.path.exists(src):
+                    os.rename(dst, src)
+        except Exception:
+            pass
         return jsonify({"success": False, "error": str(e)}), 500
 
 
@@ -1057,6 +1103,8 @@ def add_text_mapping_api():
     data = request.get_json()
     file_path = data.get("file_path", "")
     tag = data.get("tag", "").strip()
+    needs_fix = bool(data.get("needs_fix", False))
+    is_fix_tag = bool(data.get("is_fix_tag", False)) or bool(needs_fix)
     # 後方互換: juku_name + text_name でも可
     if not tag and data.get("juku_name"):
         tag = (data.get("juku_name", "") + ":" + data.get("text_name", "")).strip(":")
@@ -1065,7 +1113,13 @@ def add_text_mapping_api():
         return {"success": False, "error": "タグを入力してください"}, 400
     
     file_path = normalize_file_path(file_path)
-    add_text_mapping(file_path, tag, "")
+    commenter = session.get("username", "") or ""
+    role = _current_user_role()
+    if role == ROLE_USER:
+        return {"success": False, "error": "権限がありません"}, 403
+    if role == ROLE_EDITOR and not is_fix_tag:
+        return {"success": False, "error": "修正者は要修正/修正完了のタグのみ追加できます"}, 403
+    add_text_mapping(file_path, tag, "", commenter=commenter, needs_fix=needs_fix, is_fix_tag=is_fix_tag)
     return {"success": True}
 
 
@@ -1081,8 +1135,65 @@ def delete_text_mapping_api():
     if not file_path or not juku_name:
         return {"success": False, "error": "必要な情報が不足しています"}, 400
     
+    role = _current_user_role()
+    if role != ROLE_ADMIN:
+        return {"success": False, "error": "権限がありません"}, 403
     file_path = normalize_file_path(file_path)
     delete_text_mapping(file_path, juku_name, text_name)
+    return {"success": True}
+
+
+@app.route("/api/text-mapping", methods=["PUT"])
+@login_required
+def edit_text_mapping_api():
+    """テキスト対応情報（タグ）を編集するAPI"""
+    data = request.get_json()
+    file_path = normalize_file_path(data.get("file_path", ""))
+    old_juku_name = (data.get("juku_name", "") or "").strip()
+    old_text_name = (data.get("text_name", "") or "").strip()
+    new_tag = (data.get("new_tag", "") or "").strip()
+    needs_fix = data.get("needs_fix", None)
+    is_fix_tag_req = data.get("is_fix_tag", None)
+
+    if not file_path or not old_juku_name or not new_tag:
+        return {"success": False, "error": "必要な情報が不足しています"}, 400
+
+    mappings = load_text_mappings()
+    if file_path not in mappings:
+        return {"success": False, "error": "対象のタグが見つかりません"}, 404
+
+    # 重複チェック（同じnew_tagが既にある場合は弾く。ただし自分自身の更新は除外）
+    for item in mappings[file_path]:
+        is_self = (item.get("juku_name") == old_juku_name) and ((item.get("text_name") or "") == old_text_name)
+        if is_self:
+            continue
+        if item.get("juku_name") == new_tag and (item.get("text_name") or "") == "":
+            return {"success": False, "error": "同じタグが既に存在します"}, 400
+
+    updated = False
+    for item in mappings[file_path]:
+        if item.get("juku_name") == old_juku_name and (item.get("text_name") or "") == old_text_name:
+            role = _current_user_role()
+            if role == ROLE_USER:
+                return {"success": False, "error": "権限がありません"}, 403
+            if role == ROLE_EDITOR and not item.get("is_fix_tag"):
+                return {"success": False, "error": "修正者は要修正/修正完了のタグのみ編集できます"}, 403
+            if role == ROLE_EDITOR and not bool(is_fix_tag_req):
+                return {"success": False, "error": "修正者は要修正/修正完了のタグのみ編集できます"}, 403
+            item["juku_name"] = new_tag
+            item["text_name"] = ""
+            # commenter は保持（編集者名は記録しない）
+            if needs_fix is not None:
+                item["needs_fix"] = bool(needs_fix)
+            if is_fix_tag_req is not None:
+                item["is_fix_tag"] = bool(is_fix_tag_req)
+            updated = True
+            break
+
+    if not updated:
+        return {"success": False, "error": "対象のタグが見つかりません"}, 404
+
+    save_text_mappings(mappings)
     return {"success": True}
 
 
@@ -1104,6 +1215,7 @@ def search_files():
     
     results = []
     keyword_lower = keyword.lower()
+    only_needs_fix = (keyword == "要修正")
     
     for file_info in all_files:
         file_path_normalized = normalize_file_path(file_info["file_path"])
@@ -1111,13 +1223,17 @@ def search_files():
         folder_path = file_info["folder_path"]
         
         # ファイル名で部分一致検索
-        matched = keyword_lower in file_name.lower()
+        matched = (keyword_lower in file_name.lower()) if not only_needs_fix else False
         matching_text_mappings = []
         
         # テキストマッピング情報で検索
         if file_path_normalized in text_mappings:
             for mapping in text_mappings[file_path_normalized]:
-                if keyword_lower in mapping["juku_name"].lower() or keyword_lower in mapping["text_name"].lower():
+                if only_needs_fix:
+                    if mapping.get("needs_fix"):
+                        matched = True
+                        matching_text_mappings.append(mapping)
+                elif keyword_lower in mapping["juku_name"].lower() or keyword_lower in mapping["text_name"].lower():
                     matched = True
                     matching_text_mappings.append(mapping)
         else:
@@ -1126,7 +1242,11 @@ def search_files():
                 saved_filename = saved_path.split('/')[-1] if '/' in saved_path else saved_path
                 if saved_filename == file_name:
                     for mapping in mappings_list:
-                        if keyword_lower in mapping["juku_name"].lower() or keyword_lower in mapping["text_name"].lower():
+                        if only_needs_fix:
+                            if mapping.get("needs_fix"):
+                                matched = True
+                                matching_text_mappings.append(mapping)
+                        elif keyword_lower in mapping["juku_name"].lower() or keyword_lower in mapping["text_name"].lower():
                             matched = True
                             matching_text_mappings.append(mapping)
         
@@ -1595,6 +1715,7 @@ def download_pdf(filename):
 
 @app.route("/download-ppt/<path:filename>")
 @login_required
+@editor_or_admin_required
 def download_ppt(filename):
     """PDFと同名のppt/pptxをダウンロード（同一フォルダ内、pptx優先）"""
     # filename は「pdfの相対パス」を受け取る想定（.pdf で検証してから同名pptを探す）
