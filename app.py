@@ -1593,6 +1593,33 @@ def download_pdf(filename):
     )
 
 
+@app.route("/download-ppt/<path:filename>")
+@login_required
+def download_ppt(filename):
+    """PDFと同名のppt/pptxをダウンロード（同一フォルダ内、pptx優先）"""
+    # filename は「pdfの相対パス」を受け取る想定（.pdf で検証してから同名pptを探す）
+    decoded_filename = unquote(filename)
+    pdf_full = _resolve_and_validate_pdf_path(decoded_filename)
+    if not pdf_full or not os.path.exists(pdf_full):
+        abort(404, description="PDFファイルが見つかりません")
+
+    base_no_ext, _ = os.path.splitext(pdf_full)
+    candidates = [base_no_ext + ".pptx", base_no_ext + ".ppt"]
+    ppt_full = next((p for p in candidates if os.path.exists(p)), None)
+    if not ppt_full:
+        abort(404, description="同名のPPTファイル（.pptx/.ppt）が見つかりません")
+
+    safe_filename = os.path.basename(ppt_full) or "download.ppt"
+    return send_file(
+        ppt_full,
+        mimetype="application/vnd.openxmlformats-officedocument.presentationml.presentation"
+        if ppt_full.lower().endswith(".pptx")
+        else "application/vnd.ms-powerpoint",
+        as_attachment=True,
+        download_name=safe_filename
+    )
+
+
 @app.route("/log_print", methods=["POST"])
 @login_required
 def log_print():

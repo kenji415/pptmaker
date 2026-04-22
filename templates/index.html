@@ -560,6 +560,7 @@
             <div class="file-item-spacer"></div>
             <div class="file-item-buttons">
               {% if can_edit_files %}
+              <button class="file-action-btn" onclick="event.stopPropagation(); window.location.href='/download-ppt/' + encodeURIComponent('{{ file_path_normalized | e }}');" title="同名のPPTをダウンロード">pptDL</button>
               <button class="file-action-btn replace-pdf-btn" onclick="event.stopPropagation(); replacePdf(this);" data-file-path="{{ file_path_normalized | e }}" data-file-name="{{ file | e }}" title="PDFを差し替え（タグは維持、キャッシュは再生成）">PDF編集</button>
               <button class="file-action-btn rename-btn" onclick="event.stopPropagation(); openRenameModal(this);" data-file-path="{{ file_path_normalized | e }}" data-file-name="{{ file | e }}" title="名前を変更">名前変更</button>
               <button class="file-action-btn delete-file-btn" onclick="event.stopPropagation(); deleteFile(this);" data-file-path="{{ file_path_normalized | e }}" data-file-name="{{ file | e }}" title="削除">削除</button>
