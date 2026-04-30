@@ -8,6 +8,7 @@ import uuid
 import tempfile
 import yaml
 import shutil
+import json
 from datetime import datetime
 from urllib.parse import quote, unquote
 from functools import wraps
@@ -481,8 +482,38 @@ def pdf_to_images(filename, username=None, text_name=None, campus_name=None, inc
 
     out_dir = os.path.join(CACHE_DIR, base)
     os.makedirs(out_dir, exist_ok=True)
+    meta_path = os.path.join(out_dir, "meta.json")
     bottom_padding = 60
     right_padding = 30
+
+    # PDFが更新されていたらキャッシュを無効化（手動上書きでも必ず最新化）
+    try:
+        st = os.stat(pdf_path)
+        pdf_mtime_ns = int(getattr(st, "st_mtime_ns", int(st.st_mtime * 1_000_000_000)))
+        pdf_size = int(st.st_size)
+    except OSError:
+        pdf_mtime_ns = None
+        pdf_size = None
+
+    meta_ok = False
+    if pdf_mtime_ns is not None and pdf_size is not None and os.path.exists(meta_path):
+        try:
+            with open(meta_path, "r", encoding="utf-8") as f:
+                meta = json.load(f)
+            meta_ok = (
+                int(meta.get("pdf_mtime_ns", -1)) == pdf_mtime_ns
+                and int(meta.get("pdf_size", -1)) == pdf_size
+            )
+        except Exception:
+            meta_ok = False
+
+    # 方式1: metaが無い/壊れている/不一致なら、そのPDFのキャッシュを一度作り直す
+    if not meta_ok:
+        try:
+            shutil.rmtree(out_dir)
+        except Exception:
+            pass
+        os.makedirs(out_dir, exist_ok=True)
 
     # ページ数だけ fitz で取得
     doc = fitz.open(pdf_path)
@@ -526,6 +557,14 @@ def pdf_to_images(filename, username=None, text_name=None, campus_name=None, inc
             qr_path = os.path.join(out_dir, "page_1_qr.png")
             img.save(qr_path, "PNG")
             image_paths[0] = qr_path
+
+    # 生成したキャッシュがどのPDFのものかを記録
+    if pdf_mtime_ns is not None and pdf_size is not None:
+        try:
+            with open(meta_path, "w", encoding="utf-8") as f:
+                json.dump({"pdf_mtime_ns": pdf_mtime_ns, "pdf_size": pdf_size}, f, ensure_ascii=False)
+        except Exception:
+            pass
 
     return image_paths
 
