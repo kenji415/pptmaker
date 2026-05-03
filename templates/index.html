@@ -196,6 +196,33 @@
       font-size: 16px;
       font-weight: 500;
     }
+    /* 戻るのみ常時左上固定（ツールバーはスクロールで流れる） */
+    .breadcrumb--with-back .toolbar-left {
+      padding-left: 5.75rem;
+    }
+    .breadcrumb-back-float {
+      position: fixed;
+      top: 7.5rem;
+      transition: top 0.15s ease-out;
+      left: calc(40px + max(0px, (100vw - 40px - 1200px) / 2));
+      z-index: 50;
+      padding: 6px 12px;
+      background: #fff;
+      border-radius: 6px;
+      box-shadow: 0 1px 4px rgba(0, 0, 0, 0.12);
+      color: #0078d4;
+      text-decoration: none;
+      font-size: 16px;
+      font-weight: 500;
+      border: 1px solid #e2e8f0;
+    }
+    .breadcrumb-back-float:hover {
+      text-decoration: underline;
+      background: #f7fafc;
+    }
+    .breadcrumb-back-float.is-scrolled-compact {
+      top: 1rem;
+    }
     .file-item {
       display: flex;
       align-items: center;
@@ -204,7 +231,7 @@
     }
     .file-item-filename {
       flex-shrink: 0;
-      max-width: 240px;
+      max-width: 330px;
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
@@ -533,11 +560,13 @@
       </div>
     </div>
 
-    <div class="breadcrumb toolbar-row" id="toolbarEl" data-current-folder="{{ current_path or '' }}">
+    <div class="breadcrumb toolbar-row{% if current_path %} breadcrumb--with-back{% endif %}" id="toolbarEl" data-current-folder="{{ current_path or '' }}">
+      {% if current_path %}
+        {% set parent_path = current_path.rsplit('/', 1)[0] if '/' in current_path else '' %}
+        <a class="breadcrumb-back-float" href="/folder/{{ parent_path }}">← 戻る</a>
+      {% endif %}
       <div class="toolbar-left">
         {% if current_path %}
-          {% set parent_path = current_path.rsplit('/', 1)[0] if '/' in current_path else '' %}
-          <a href="/folder/{{ parent_path }}">← 戻る</a>
           {% if current_path_display %}
             <span class="breadcrumb-path">{{ current_path_display }}</span>
           {% endif %}
@@ -718,6 +747,17 @@
       }
     }
     restoreListScroll();
+
+    (function initBackButtonFloatScroll() {
+      var el = document.querySelector('.breadcrumb-back-float');
+      if (!el) return;
+      function sync() {
+        var y = window.scrollY || document.documentElement.scrollTop || 0;
+        el.classList.toggle('is-scrolled-compact', y > 72);
+      }
+      window.addEventListener('scroll', sync, { passive: true });
+      sync();
+    })();
 
     // プレビューへ遷移する直前にスクロール位置を保存（キャプチャで先に実行）
     document.addEventListener('DOMContentLoaded', function () {
