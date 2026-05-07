@@ -569,8 +569,82 @@ def pdf_to_images(filename, username=None, text_name=None, campus_name=None, inc
     return image_paths
 
 
+def _natural_sort_key(s):
+    """自然順ソート用のキー（数字部分は数値として比較）"""
+    parts = re.split(r'(\d+)', s)
+    return [(0, int(p)) if p.isdigit() else (1, p.lower()) for p in parts]
+
+
+# QS算数 学年フォルダ内の特殊ソート規則
+# (正規表現パターン, 優先度) のリスト。番号が小さいほど上位に表示。
+# 実ファイルは「QS_」プレフィックスが付くため、これを任意で許容する。
+_QS_MATH_GRADE_RULES = {
+    6: [
+        (re.compile(r'^(?:QS_)?61[-_]?\d', re.IGNORECASE), 1),
+        (re.compile(r'^(?:QS_)?H61[-_]?\d', re.IGNORECASE), 2),
+        (re.compile(r'^(?:QS_)?N61[-_]?\d', re.IGNORECASE), 3),
+        (re.compile(r'^(?:QS_)?F61[-_]?\d', re.IGNORECASE), 4),
+        (re.compile(r'^(?:QS_)?6上'), 5),
+        (re.compile(r'^(?:QS_)?6下'), 6),
+    ],
+    5: [
+        (re.compile(r'^(?:QS_)?510[-_]?\d', re.IGNORECASE), 1),
+        (re.compile(r'^(?:QS_)?H51[-_]?\d', re.IGNORECASE), 2),
+        (re.compile(r'^(?:QS_)?N51[-_]?\d', re.IGNORECASE), 3),
+        (re.compile(r'^(?:QS_)?F51[-_]?\d', re.IGNORECASE), 4),
+        (re.compile(r'^(?:QS_)?5上'), 5),
+        (re.compile(r'^(?:QS_)?5下'), 6),
+    ],
+    4: [
+        (re.compile(r'^(?:QS_)?41B[-_]?\d', re.IGNORECASE), 1),
+        (re.compile(r'^(?:QS_)?H41[-_]?\d', re.IGNORECASE), 2),
+        (re.compile(r'^(?:QS_)?N41[-_]?\d', re.IGNORECASE), 3),
+        (re.compile(r'^(?:QS_)?F41[-_]?\d', re.IGNORECASE), 4),
+        (re.compile(r'^(?:QS_)?4上'), 5),
+        (re.compile(r'^(?:QS_)?4下'), 6),
+    ],
+}
+
+
+def _qs_math_grade_sort_key(filename, grade):
+    """QS算数の学年フォルダ用のソートキー
+    指定されたパターンにマッチしないものは優先度99（一番下）。
+    """
+    rules = _QS_MATH_GRADE_RULES.get(grade, [])
+    for pattern, priority in rules:
+        if pattern.match(filename):
+            return (priority, _natural_sort_key(filename))
+    return (99, _natural_sort_key(filename))
+
+
+def _detect_qs_math_grade(folder_path):
+    """folder_path が QS算数の学年フォルダ（…/算数/N年）か判定し、学年(4/5/6)を返す。
+    該当しない場合は None を返す。
+    """
+    if not folder_path:
+        return None
+    path_normalized = folder_path.replace("\\", "/").strip("/")
+    if not path_normalized:
+        return None
+    parts = path_normalized.split("/")
+    if "算数" not in parts:
+        return None
+    last_segment = parts[-1]
+    m = re.match(r'^([456])年$', last_segment)
+    if not m:
+        return None
+    grade = int(m.group(1))
+    if grade in _QS_MATH_GRADE_RULES:
+        return grade
+    return None
+
+
 def get_folders_and_files(folder_path=""):
-    """フォルダとPDFファイルを取得（Windows Explorerの順序でソート）"""
+    """フォルダとPDFファイルを取得（Windows Explorerの順序でソート）。
+    QS算数の学年フォルダ（算数/4年, 算数/5年, 算数/6年）では、
+    番号付きテキスト群（61-XX, H61-XX, N61-XX, F61-XX, 6上, 6下 …）が
+    先頭に決まった順で並び、その他は末尾に来るよう特殊ソートを適用する。
+    """
     full_path = os.path.join(PDF_DIR, folder_path) if folder_path else PDF_DIR
     
     if not os.path.exists(full_path):
@@ -578,6 +652,8 @@ def get_folders_and_files(folder_path=""):
     
     folders = []
     files = []
+
+    math_grade = _detect_qs_math_grade(folder_path)
     
     try:
         # Windowsのロケール設定を使用して自然な順序でソート
@@ -591,7 +667,10 @@ def get_folders_and_files(folder_path=""):
         
         # ロケールベースの自然な順序でソート
         folders.sort(key=lambda x: locale.strxfrm(x))
-        files.sort(key=lambda x: locale.strxfrm(x))
+        if math_grade is not None:
+            files.sort(key=lambda x: _qs_math_grade_sort_key(x, math_grade))
+        else:
+            files.sort(key=lambda x: locale.strxfrm(x))
     except Exception:
         # ロケール設定に失敗した場合は通常のソート
         for item in os.scandir(full_path):
@@ -600,7 +679,10 @@ def get_folders_and_files(folder_path=""):
             elif item.name.lower().endswith(".pdf"):
                 files.append(item.name)
         folders.sort()
-        files.sort()
+        if math_grade is not None:
+            files.sort(key=lambda x: _qs_math_grade_sort_key(x, math_grade))
+        else:
+            files.sort()
     
     return folders, files
 
