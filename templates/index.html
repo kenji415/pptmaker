@@ -223,6 +223,25 @@
     .breadcrumb-back-float.is-scrolled-compact {
       top: 1rem;
     }
+    /* 検索窓も常時右上固定（戻るボタンと対称）。
+       .search-box-wrapper の position: relative を打ち消すため
+       詳細度を上げてある。 */
+    .search-box-wrapper.breadcrumb-search-float {
+      position: fixed;
+      top: 7.5rem;
+      transition: top 0.15s ease-out;
+      right: calc(40px + max(0px, (100vw - 40px - 1200px) / 2));
+      left: auto;
+      z-index: 50;
+      width: 250px;
+    }
+    .search-box-wrapper.breadcrumb-search-float.is-scrolled-compact {
+      top: 1rem;
+    }
+    .search-box-wrapper.breadcrumb-search-float .search-input {
+      background: #fff;
+      box-shadow: 0 1px 4px rgba(0, 0, 0, 0.08);
+    }
     .file-item {
       display: flex;
       align-items: center;
@@ -565,6 +584,12 @@
         {% set parent_path = current_path.rsplit('/', 1)[0] if '/' in current_path else '' %}
         <a class="breadcrumb-back-float" href="/folder/{{ parent_path }}">← 戻る</a>
       {% endif %}
+      <div class="search-box-wrapper breadcrumb-search-float">
+        <div class="search-box">
+          <span class="search-icon">🔍</span>
+          <input type="text" class="search-input" id="searchInput" placeholder="ファイル検索（左の一覧が絞り込まれます）" oninput="handleSearch()">
+        </div>
+      </div>
       <div class="toolbar-left">
         {% if current_path %}
           {% if current_path_display %}
@@ -572,21 +597,21 @@
           {% endif %}
         {% endif %}
       </div>
+      {# PDF追加ボタンは一旦非表示。再表示するときは {% if false %} を外す。
+         PDF差し替え用 input はファイル一覧の「PDF編集」ボタンから使うので残しておく。 #}
+      {% if false %}
       <div class="toolbar-right">
         {% if can_edit_files %}
         <label class="pdf-add-btn">
           PDF追加
           <input type="file" id="pdfUploadInput" accept=".pdf" onchange="uploadPdf(this)">
         </label>
-        <input type="file" id="pdfReplaceInput" accept=".pdf" style="display: none;" onchange="replacePdfSubmit(this)">
         {% endif %}
-        <div class="search-box-wrapper">
-          <div class="search-box">
-            <span class="search-icon">🔍</span>
-            <input type="text" class="search-input" id="searchInput" placeholder="ファイル検索（左の一覧が絞り込まれます）" oninput="handleSearch()">
-          </div>
-        </div>
       </div>
+      {% endif %}
+      {% if can_edit_files %}
+      <input type="file" id="pdfReplaceInput" accept=".pdf" style="display: none;" onchange="replacePdfSubmit(this)">
+      {% endif %}
     </div>
 
     <ul class="folder-list">
@@ -748,18 +773,43 @@
     }
     restoreListScroll();
 
-    (function initBackButtonFloatScroll() {
-      var el = document.querySelector('.breadcrumb-back-float');
-      if (!el) return;
+    (function initFloatingToolbarScroll() {
+      var els = document.querySelectorAll('.breadcrumb-back-float, .breadcrumb-search-float');
+      if (!els.length) return;
       function sync() {
         var y = window.scrollY || document.documentElement.scrollTop || 0;
-        el.classList.toggle('is-scrolled-compact', y > 72);
+        var compact = y > 72;
+        els.forEach(function (el) {
+          el.classList.toggle('is-scrolled-compact', compact);
+        });
       }
       window.addEventListener('scroll', sync, { passive: true });
       sync();
     })();
 
-    // プレビューへ遷移する直前にスクロール位置を保存（キャプチャで先に実行）
+    // 現在のスクロール位置と検索ワードを sessionStorage に保存する。
+    // プレビューへの遷移直前、および名前変更・削除などで location.reload() する直前に呼ぶ。
+    function saveListState() {
+      try {
+        var folderPath = (document.getElementById('toolbarEl') && document.getElementById('toolbarEl').dataset.currentFolder) || '';
+        var scrollY = window.scrollY;
+        sessionStorage.setItem('printviewer_list_scroll', JSON.stringify({
+          folderPath: folderPath,
+          scrollY: scrollY
+        }));
+        var searchInputEl = document.getElementById('searchInput');
+        var searchKeyword = (searchInputEl && searchInputEl.value) ? searchInputEl.value : '';
+        sessionStorage.setItem('printviewer_list_search', JSON.stringify({
+          folderPath: folderPath,
+          keyword: searchKeyword
+        }));
+        if (SCROLL_DEBUG) console.log('[scroll保存] 保存した', { folderPath: folderPath, scrollY: scrollY, keyword: searchKeyword });
+      } catch (err) {
+        if (SCROLL_DEBUG) console.log('[scroll保存] エラー', err);
+      }
+    }
+
+    // プレビューへ遷移する直前にスクロール位置と検索ワードを保存（キャプチャで先に実行）
     document.addEventListener('DOMContentLoaded', function () {
       var container = document.querySelector('.container');
       if (!container) return;
@@ -770,23 +820,7 @@
           if (fn) a = fn.querySelector('a[href*="/view/"]');
         }
         if (!a || !a.href || a.href.indexOf('/view/') === -1) return;
-        var folderPath = (document.getElementById('toolbarEl') && document.getElementById('toolbarEl').dataset.currentFolder) || '';
-        try {
-          var scrollY = window.scrollY;
-          sessionStorage.setItem('printviewer_list_scroll', JSON.stringify({
-            folderPath: folderPath,
-            scrollY: scrollY
-          }));
-          var searchInputEl = document.getElementById('searchInput');
-          var searchKeyword = (searchInputEl && searchInputEl.value) ? searchInputEl.value : '';
-          sessionStorage.setItem('printviewer_list_search', JSON.stringify({
-            folderPath: folderPath,
-            keyword: searchKeyword
-          }));
-          if (SCROLL_DEBUG) console.log('[scroll保存] 保存した', { folderPath: folderPath, scrollY: scrollY });
-        } catch (err) {
-          if (SCROLL_DEBUG) console.log('[scroll保存] エラー', err);
-        }
+        saveListState();
       }, true);
     });
 
@@ -858,6 +892,7 @@
       .then(data => {
         if (data.success) {
           alert('PDFを差し替えました。タグはそのまま、表示用キャッシュは次回表示時に再生成されます。');
+          saveListState();
           location.reload();
         } else {
           alert('差し替えに失敗しました: ' + (data.error || '不明なエラー'));
@@ -879,6 +914,7 @@
       .then(response => response.json())
       .then(data => {
         if (data.success) {
+          saveListState();
           location.reload();
         } else {
           alert('アップロードに失敗しました: ' + (data.error || '不明なエラー'));
@@ -914,6 +950,7 @@
       .then(data => {
         if (data.success) {
           closeRenameModal();
+          saveListState();
           location.reload();
         } else {
           alert('名前変更に失敗しました: ' + (data.error || '不明なエラー'));
@@ -937,6 +974,7 @@
       .then(response => response.json())
       .then(data => {
         if (data.success) {
+          saveListState();
           location.reload();
         } else {
           alert('削除に失敗しました: ' + (data.error || '不明なエラー'));
@@ -1096,6 +1134,7 @@
       .then(response => response.json())
       .then(data => {
         if (data.success) {
+          saveListState();
           location.reload();
         } else {
           alert('追加に失敗しました: ' + (data.error || '不明なエラー'));
@@ -1127,6 +1166,7 @@
       .then(response => response.json())
       .then(data => {
         if (data.success) {
+          saveListState();
           location.reload();
         } else {
           alert('削除に失敗しました: ' + (data.error || '不明なエラー'));
