@@ -1,5 +1,5 @@
 @echo off
-REM Watch: start printviewer if not running (for Task Scheduler, every 1 min)
+REM Watch: start printviewer if not running (for Task Scheduler; interval set in register script / GUI, e.g. 10 min)
 cd /d "%~dp0"
 set LOG=%~dp0watch_printviewer.log
 

@@ -9,7 +9,7 @@ import tempfile
 import yaml
 import shutil
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 from urllib.parse import quote, unquote
 from functools import wraps
 from pathlib import Path
@@ -23,6 +23,17 @@ import fitz  # PyMuPDF
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("SECRET_KEY", "your-secret-key-change-this-in-production")
+
+# ログイン保持: 30日。使用中はリクエストごとに期限を延ばす（SESSION_REFRESH_EACH_REQUEST）
+app.config["PERMANENT_SESSION_LIFETIME"] = timedelta(days=30)
+app.config["SESSION_REFRESH_EACH_REQUEST"] = True
+# LAN / プロキシ経由でも壊れにくいクッキー設定（HTTP想定なので Secure は付けない）
+app.config["SESSION_COOKIE_HTTPONLY"] = True
+app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
+app.config["SESSION_COOKIE_SECURE"] = False
+app.config["SESSION_COOKIE_PATH"] = "/"
+# ドメインを固定しない（127.0.0.1 と LAN IP は別ホスト扱いのまま。運用は同一URLを推奨）
+app.config["SESSION_COOKIE_DOMAIN"] = None
 
 # 設定: 環境変数で上書き可能、なければローカルパスを使用
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -1124,6 +1135,8 @@ def login():
         
         users = load_users()
         if username in users and check_password_hash(users[username]["password_hash"], password):
+            session.clear()
+            session.permanent = True  # 30日保持＋利用中の自動延長
             session["username"] = username
             role = users[username]["role"]
             session["role"] = role
@@ -1138,9 +1151,7 @@ def login():
 @app.route("/logout")
 def logout():
     """ログアウト"""
-    session.pop("username", None)
-    session.pop("is_admin", None)
-    session.pop("role", None)
+    session.clear()
     return redirect(url_for("login"))
 
 
@@ -1415,6 +1426,26 @@ def folder_view(folder_path=""):
         current_path_display = normalized_display.strip('/')
     else:
         current_path_display = ""
+
+    # 同階層（兄弟フォルダ）を ◀ / ▶ で行き来できるようにする
+    sibling_prev_path = ""
+    sibling_next_path = ""
+    sibling_prev_name = ""
+    sibling_next_name = ""
+    if decoded_folder_path:
+        normalized_decoded = decoded_folder_path.replace("\\", "/").strip("/")
+        current_folder_name = normalized_decoded.rsplit("/", 1)[-1]
+        parent_decoded_path = normalized_decoded.rsplit("/", 1)[0] if "/" in normalized_decoded else ""
+
+        sibling_folders, _ = get_folders_and_files(parent_decoded_path)
+        if len(sibling_folders) > 1 and current_folder_name in sibling_folders:
+            idx = sibling_folders.index(current_folder_name)
+            prev_name = sibling_folders[(idx - 1) % len(sibling_folders)]
+            next_name = sibling_folders[(idx + 1) % len(sibling_folders)]
+            sibling_prev_path = f"{parent_decoded_path}/{prev_name}".strip("/") if parent_decoded_path else prev_name
+            sibling_next_path = f"{parent_decoded_path}/{next_name}".strip("/") if parent_decoded_path else next_name
+            sibling_prev_name = prev_name
+            sibling_next_name = next_name
     
     # テキスト対応情報を読み込む
     text_mappings = load_text_mappings()
@@ -1465,6 +1496,10 @@ def folder_view(folder_path=""):
         encoded_files=encoded_files,  # URL用（エンコード済み）
         current_path=current_path_encoded,  # URL用（エンコード済み）
         current_path_display=current_path_display,  # 表示用（デコード済み）
+        sibling_prev_path=sibling_prev_path,  # 同階層の前
+        sibling_next_path=sibling_next_path,  # 同階層の次
+        sibling_prev_name=sibling_prev_name,
+        sibling_next_name=sibling_next_name,
         file_text_mappings=file_text_mappings,  # ファイルごとのテキスト対応情報
         username=session.get("username", "unknown"),
         is_admin=session.get("is_admin", False),

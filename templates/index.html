@@ -196,16 +196,58 @@
       font-size: 16px;
       font-weight: 500;
     }
-    /* 戻るのみ常時左上固定（ツールバーはスクロールで流れる） */
+
+    .breadcrumb-sibling-nav {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .breadcrumb-sibling-btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 4px;
+      min-width: 34px;
+      height: 34px;
+      padding: 0 10px;
+      border-radius: 6px;
+      border: 1px solid #e2e8f0;
+      background: #fff;
+      color: #0078d4;
+      text-decoration: none;
+      font-size: 14px;
+      font-weight: 600;
+      flex-shrink: 0;
+      line-height: 1;
+      box-shadow: 0 1px 4px rgba(0, 0, 0, 0.12);
+      white-space: nowrap;
+    }
+    .breadcrumb-sibling-btn:hover {
+      background: #f7fafc;
+      text-decoration: none;
+    }
+    /* 戻る＋同階層ナビを常時左上固定（ツールバーはスクロールで流れる） */
     .breadcrumb--with-back .toolbar-left {
       padding-left: 5.75rem;
     }
-    .breadcrumb-back-float {
+    .breadcrumb--with-back.breadcrumb--with-siblings .toolbar-left {
+      padding-left: 14rem;
+    }
+    .breadcrumb-nav-float {
       position: fixed;
       top: 7.5rem;
       transition: top 0.15s ease-out;
       left: calc(40px + max(0px, (100vw - 40px - 1200px) / 2));
       z-index: 50;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .breadcrumb-nav-float.is-scrolled-compact {
+      top: 1rem;
+    }
+    .breadcrumb-back-float {
       padding: 6px 12px;
       background: #fff;
       border-radius: 6px;
@@ -215,13 +257,11 @@
       font-size: 16px;
       font-weight: 500;
       border: 1px solid #e2e8f0;
+      white-space: nowrap;
     }
     .breadcrumb-back-float:hover {
       text-decoration: underline;
       background: #f7fafc;
-    }
-    .breadcrumb-back-float.is-scrolled-compact {
-      top: 1rem;
     }
     /* 検索窓も常時右上固定（戻るボタンと対称）。
        .search-box-wrapper の position: relative を打ち消すため
@@ -245,8 +285,15 @@
     .file-item {
       display: flex;
       align-items: center;
+      flex: 1;
+      min-width: 0;
       width: 100%;
       gap: 6px;
+    }
+    .file-item-spacer {
+      flex: 1;
+      min-width: 8px;
+      cursor: pointer;
     }
     .file-item-filename {
       flex-shrink: 0;
@@ -279,10 +326,6 @@
       min-width: 0;
       overflow: hidden;
       white-space: nowrap;
-    }
-    .file-item-spacer {
-      flex: 1;
-      min-width: 8px;
     }
     .file-text-mapping-item {
       background: #f0f0f0;
@@ -579,10 +622,20 @@
       </div>
     </div>
 
-    <div class="breadcrumb toolbar-row{% if current_path %} breadcrumb--with-back{% endif %}" id="toolbarEl" data-current-folder="{{ current_path or '' }}">
+    <div class="breadcrumb toolbar-row{% if current_path %} breadcrumb--with-back{% if sibling_prev_path or sibling_next_path %} breadcrumb--with-siblings{% endif %}{% endif %}" id="toolbarEl" data-current-folder="{{ current_path or '' }}">
       {% if current_path %}
         {% set parent_path = current_path.rsplit('/', 1)[0] if '/' in current_path else '' %}
-        <a class="breadcrumb-back-float" href="/folder/{{ parent_path }}">← 戻る</a>
+        <div class="breadcrumb-nav-float">
+          <a class="breadcrumb-back-float" href="/folder/{{ parent_path }}">← 戻る</a>
+          <div class="breadcrumb-sibling-nav">
+            {% if sibling_prev_path %}
+              <a class="breadcrumb-sibling-btn" href="/folder/{{ sibling_prev_path }}" title="前の同階層フォルダへ（{{ sibling_prev_name }}）">◀{{ sibling_prev_name }}</a>
+            {% endif %}
+            {% if sibling_next_path %}
+              <a class="breadcrumb-sibling-btn" href="/folder/{{ sibling_next_path }}" title="次の同階層フォルダへ（{{ sibling_next_name }}）">{{ sibling_next_name }}▶</a>
+            {% endif %}
+          </div>
+        </div>
       {% endif %}
       <div class="search-box-wrapper breadcrumb-search-float">
         <div class="search-box">
@@ -591,10 +644,8 @@
         </div>
       </div>
       <div class="toolbar-left">
-        {% if current_path %}
-          {% if current_path_display %}
-            <span class="breadcrumb-path">{{ current_path_display }}</span>
-          {% endif %}
+        {% if current_path and current_path_display %}
+          <span class="breadcrumb-path">{{ current_path_display }}</span>
         {% endif %}
       </div>
       {# PDF追加ボタンは一旦非表示。再表示するときは {% if false %} を外す。
@@ -650,9 +701,9 @@
           {% set mappings = [] %}
         {% endif %}
         {% set needs_fix_any = (mappings | selectattr('needs_fix') | list | length) > 0 %}
-        <li class="file-icon" data-file-path="{{ file_path_normalized }}">
+        <li class="file-icon" data-file-path="{{ file_path_normalized }}" data-file-url="{{ file_url }}" onclick="openFileFromRow(event, this)">
           <div class="file-item">
-            <div class="file-item-filename" onclick="window.location.href='{{ file_url }}'">
+            <div class="file-item-filename">
               <a href="{{ file_url }}"{% if needs_fix_any %} class="needs-fix"{% endif %}>{{ file_display }}</a>
             </div>
             {% if session.get('role') in ['admin','editor'] %}
@@ -774,7 +825,7 @@
     restoreListScroll();
 
     (function initFloatingToolbarScroll() {
-      var els = document.querySelectorAll('.breadcrumb-back-float, .breadcrumb-search-float');
+      var els = document.querySelectorAll('.breadcrumb-nav-float, .breadcrumb-search-float');
       if (!els.length) return;
       function sync() {
         var y = window.scrollY || document.documentElement.scrollTop || 0;
@@ -786,6 +837,14 @@
       window.addEventListener('scroll', sync, { passive: true });
       sync();
     })();
+
+    function openFileFromRow(event, rowEl) {
+      if (event.target.closest('button, .file-item-buttons, .add-text-btn')) return;
+      var url = rowEl && rowEl.dataset && rowEl.dataset.fileUrl;
+      if (!url) return;
+      saveListState();
+      window.location.href = url;
+    }
 
     // 現在のスクロール位置と検索ワードを sessionStorage に保存する。
     // プレビューへの遷移直前、および名前変更・削除などで location.reload() する直前に呼ぶ。
