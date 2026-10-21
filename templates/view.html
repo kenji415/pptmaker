@@ -68,6 +68,20 @@
     #toolbar button:active {
       background-color: #005a9e;
     }
+    #toolbar button.copy-filename {
+      padding: 2px 8px;
+      margin-left: 6px;
+      font-size: 12px;
+      font-weight: 500;
+      background-color: #6c757d;
+      vertical-align: middle;
+    }
+    #toolbar button.copy-filename:hover {
+      background-color: #5a6268;
+    }
+    #toolbar button.copy-filename.copied {
+      background-color: #28a745;
+    }
     .page-wrapper {
       position: relative;
       display: inline-block;
@@ -157,7 +171,7 @@
       <a href="/" style="margin-right: 15px; padding: 6px 16px; background-color: #6c757d; color: white; text-decoration: none; border-radius: 4px; font-size: 14px; font-weight: 500;">一覧に戻る</a>
       {% endif %}
       <span>ユーザー: {{ username }}</span> |
-      <span>ファイル: {{ filename }}</span>
+      <span>ファイル: <span id="filename-text">{{ filename }}</span><button type="button" class="copy-filename" id="copy-filename-btn" onclick="copyFilename()" title="ファイル名をコピー">コピー</button></span>
     </div>
     <div>
       <button onclick="downloadPdf()" style="margin-right: 10px;">PDF保存</button>
@@ -202,6 +216,49 @@ document.querySelectorAll('img').forEach(function(img) {
     return false;
   });
 });
+
+function copyFilename() {
+  const text = document.getElementById('filename-text').textContent;
+  const btn = document.getElementById('copy-filename-btn');
+  const done = function() {
+    const prev = btn.textContent;
+    btn.textContent = 'コピー済み';
+    btn.classList.add('copied');
+    setTimeout(function() {
+      btn.textContent = prev;
+      btn.classList.remove('copied');
+    }, 1500);
+  };
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(text).then(done).catch(function() {
+      fallbackCopy(text) && done();
+    });
+  } else if (fallbackCopy(text)) {
+    done();
+  }
+}
+
+function fallbackCopy(text) {
+  const ta = document.createElement('textarea');
+  ta.value = text;
+  ta.setAttribute('readonly', '');
+  ta.style.cssText = 'position:fixed;top:0;left:0;width:1px;height:1px;opacity:0;z-index:-1;-webkit-user-select:text;user-select:text;';
+  const prevSelect = document.body.onselectstart;
+  document.body.onselectstart = null;
+  document.body.appendChild(ta);
+  ta.focus();
+  ta.select();
+  ta.setSelectionRange(0, text.length);
+  let ok = false;
+  try {
+    ok = document.execCommand('copy');
+  } catch (e) {
+    ok = false;
+  }
+  document.body.removeChild(ta);
+  document.body.onselectstart = prevSelect;
+  return ok;
+}
 
 function downloadPdf() {
   // PDFファイルをダウンロード
